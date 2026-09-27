@@ -1,0 +1,29 @@
+// 伪后端路由处理器(规格 16.5:无状态,数据快照入 → 数据出)
+// 宿主把本程序的返回值交给模板渲染,得到页面 HTML。
+let quests = [
+  { id: "q1", name: "迷雾森林", level: 3, hot: true, tone: "#586" },
+  { id: "q2", name: "沉没神殿", level: 7, hot: true, tone: "#b30" },
+  { id: "q3", name: "草原试炼", level: 1, hot: false, tone: "#586" },
+  { id: "q4", name: "星之塔", level: 9, hot: false, tone: "#b30" },
+];
+
+class Summary {
+  total = 0;
+  maxLevel = 0;
+  constructor(quests) {
+    for (const q of quests) {
+      this.total += 1;
+      if (q.level > this.maxLevel) { this.maxLevel = q.level; }
+    }
+  }
+  headline() { return str(this.total) + " 个关卡,最高 Lv." + str(this.maxLevel); }
+}
+
+let s = new Summary(quests);
+
+return {
+  title: "选择关卡",
+  headline: s.headline(),
+  player: { name: "Alice", hp: 76 },
+  quests: quests,
+};

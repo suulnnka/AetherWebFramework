@@ -1,0 +1,25 @@
+{
+  "name": "aetherjs",
+  "version": "0.2.0",
+  "type": "module",
+  "description": "AetherJS v0.2 —— webos 安全脚本语言(JS 安全子集,编译为 ES 模块产物经 blob/data 加载)+ 伪 SSR 模板引擎;实现对应 docs/language-spec-v0.2.md 十轮定稿",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./lexer": "./src/lexer.js",
+    "./parser": "./src/parser.js",
+    "./analyze": "./src/analyze.js",
+    "./codegen": "./src/codegen.js",
+    "./runtime": "./src/runtime.js",
+    "./template": "./src/template.js"
+  },
+  "scripts": {
+    "test": "node test/run.mjs",
+    "build:examples": "node tools/compile-examples.mjs"
+  },
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/suulnnka/AetherJS.git"
+  }
+}

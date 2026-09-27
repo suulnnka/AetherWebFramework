@@ -1,0 +1,15 @@
+<div id="menu">
+  <h1>{{it.title}}</h1>
+  <p class="headline">{{it.headline}}</p>
+  <p style="color: #356; font-size: 13px">{{it.player.name}} · HP {{it.player.hp}}</p>
+  <ul>
+    {{#each it.quests as q}}
+    <li class="quest">
+      <b>{{q.name}}</b>
+      <span class="lv" style="color: {{q.tone}}">Lv.{{q.level}}</span>
+      {{#if q.hot}}<em>热门</em>{{/if}}
+    </li>
+    {{/each}}
+  </ul>
+  <p class="foot"><a href="pages/help.html">玩法说明</a> · <a href="index.html">返回</a></p>
+</div>

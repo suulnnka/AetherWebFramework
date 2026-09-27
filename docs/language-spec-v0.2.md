@@ -1,7 +1,7 @@
 # AetherJS v0.2 语言设计规格(定稿)
 
 > **状态**:设计定稿,**未实施**。仓库中现有代码为 v0.1 实现,与本规格不一致;本规格是对 v0.1 的反魔法重设计,是否实施、何时实施另议。
-> **定稿时间**:2026-09-28,经十轮迭代收敛。
+> **定稿时间**:2026-09-28,经十一轮迭代收敛(第 11 轮:v0.2 实现落地)。
 > **子集原则**(第 5 轮确立):AetherJS 是 JS 的子集 —— 保留的特性行为必须与 JS 一致;与 JS 不一致的用法只能**砍掉**(编译错),不能改写语义。
 
 ## 0. 定位与非目标
@@ -34,7 +34,7 @@ Program  → Stmt*
 Stmt     → LetDecl | FuncDecl | ClassDecl | If | While | For | ForOf
           | "break" ";" | "continue" ";" | "return" Expr? ";" | "throw" Expr ";"
           | Try | Block | ExprStmt
-LetDecl  → ("let"|"const") ID "=" Assign ("," ID "=" Assign)* ";"    // 必须初始化
+LetDecl  → ("let"|"const") ID "=" Expr ("," ID "=" Expr)* ";"    // 必须初始化(值为表达式,非赋值)
 FuncDecl → "function" ID "(" Params? ")" Block
 ClassDecl→ "class" ID "{" ClassMember* "}"
 ClassMember → FieldDecl | MethodDecl | ConstructorDecl
@@ -50,7 +50,7 @@ ExprStmt → Expr ";"                                                     // Exp
 Block    → "{" Stmt* "}"
 
 Expr → Ternary
-Ternary → Or ("?" Assign ":" Ternary)?          // test 须 boolean
+Ternary → Or ("?" Expr ":" Ternary)?          // test 须 boolean;分支为表达式(非赋值)
 Or → And ("||" And)*
 And → Eq ("&&" Eq)*                              // && || 仅 boolean 进出
 Eq → Rel (("==="|"!==") Rel)*
@@ -71,8 +71,8 @@ Primary → NUM | STR | "true" | "false" | "null" | "undefined"
          | "(" Params ")" "=>" Body | ID "=>" Body
          | "new" MemberExpr "(" Args? ")"        // new 仅作用于类,实参括号必填
 MemberExpr → Primary ("." ID | "[" Expr "]")*    // 不含调用的后缀链
-ArrayLit → "[" (Assign ("," Assign)* ","?)? "]"
-ObjectLit → "{" ((ID|STR) ":" Assign ("," …)* ","?)? "}"
+ArrayLit → "[" (Expr ("," Expr)* ","?)? "]"
+ObjectLit → "{" ((ID|STR) ":" Expr ("," …)* ","?)? "}"
 ```
 
 ¹ for 头是唯一允许"声明/赋值/自增"出现的表达式槽位;**赋值在其他任何表达式位置都是语法错**(`if (x = 1)` 不存在,链式赋值不存在)。`++/--` 仍是表达式。
@@ -370,6 +370,7 @@ print(g.grade(59));
 | 8 | **模板与渲染边界入规格**(第 16 节):模板按程序编译(白名单文法 → IR,文法严于 HTML)、渲染按类型化槽(href/src 校验非转义、禁外部资源即禁外传通道)、事后三层检测(DOMParser 独立复检、MutationObserver、CSP 兜底);回调跨界规则补入第 10 节;推荐脚本无状态架构;伪后端明示非信任边界 |
 | 9 | **实现方案调研入附录 B**(非规范性,不含任何实施承诺);重要发现:16.4 的 CSP 兜底与运行时 `new Function` 存在张力,候选解法已列,实施前需验证 |
 | 10 | **执行机制定案:blob 模块**(B.2):编译产物包为 ES 模块经 Blob URL 动态 `import()` 加载,编译异步、执行同步;CSP 放行 `blob:`、不开 `unsafe-eval`,与 16.4 兜底共存(16.4 的 CSP 行相应补 `blob:`)。场景定位:游戏作者网页工具,事件级渲染频率使 Worker 克隆往返不划算,Worker 降为备用;nonce 判定不采用(静态 CSP 死结 + DOM 外泄/不记名通行证等风险,记录为服务端场景可用) |
+| 11 | **实现落地 + 文法勘误**:let 初始化值、三元分支、数组/对象元素由 Assign 更正为 Expr(与脚注 ¹"赋值仅语句位与 for 头"一致,消除文法与脚注的自相矛盾);构造顺序勘误确认:字段 → 方法(不含 constructor)→ constructor 赋值,故 keys(实例) 序为"声明字段、方法、构造器赋值键"。实现:110 例测试全绿,样例与编译产物落 examples/compiled |
 
 ## 附录 B:实现方案调研(非规范性,不含实施承诺)
 

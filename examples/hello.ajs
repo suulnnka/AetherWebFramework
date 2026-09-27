@@ -1,0 +1,32 @@
+// AetherJS v0.2 —— 语言特性一览
+// 数据:严格运算、显式转换、null 原型对象
+let scores = [72, 91, 55, 84, 68];
+let total = 0;
+for (const s of scores) { total += s; }
+let mean = total / scores.length;
+
+class Grader {
+  cutoff = 60;
+  constructor(cutoff) { this.cutoff = cutoff; }
+  grade(m) {
+    if (m >= this.cutoff) { return "及格"; }
+    return "不及格";
+  }
+}
+
+let g = new Grader(60);
+print("均值 " + fixed(mean, 1) + " → " + g.grade(mean));
+
+// 严格类型:num()/str() 显式转换,"3" + 1 会抛 type 错
+print(num("3") + 1);
+print(str(12) + " 个关卡");
+
+// 标准库四件套
+let table = { hp: 30, mp: 12 };
+let copy1 = merge(table, { hp: 99 });
+print(eq(table, { hp: 30, mp: 12 }) + " / " + copy1.hp);
+
+// 错误即字符串(规格 9)
+try { 1 + "a"; } catch (e) { print("捕获:", e); }
+
+return { title: "评分", mean: mean, pass: g.grade(mean) };

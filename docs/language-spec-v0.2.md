@@ -1,7 +1,8 @@
-# AetherJS v0.2 语言设计规格(定稿)
+# AetherWebFramework 规格文档(语言:AetherJS v0.2)(定稿)
 
-> **状态**:设计定稿,**未实施**。仓库中现有代码为 v0.1 实现,与本规格不一致;本规格是对 v0.1 的反魔法重设计,是否实施、何时实施另议。
-> **定稿时间**:2026-09-28,经十二轮迭代收敛(第 11 轮:v0.2 实现落地;第 12 轮:DOM 控制通道)。
+> **项目**:AetherWebFramework —— webos 的沙盒网站框架(与 AetherWebOS / AetherWebDatabase 同族);**语言**:AetherJS v0.2,Django 之于 Python 的关系。
+> **状态**:规格与实现同步 —— 语言、模板引擎、DOM 控制通道已实现(`src/`,120 例测试),路由(16.7)规格定稿待实现。
+> **定稿时间**:2026-09-28,经十三轮迭代收敛(第 11 轮:实现落地;第 12 轮:DOM 控制通道;第 13 轮:伪后端路由)。
 > **子集原则**(第 5 轮确立):AetherJS 是 JS 的子集 —— 保留的特性行为必须与 JS 一致;与 JS 不一致的用法只能**砍掉**(编译错),不能改写语义。
 
 ## 0. 定位与非目标
@@ -367,6 +368,60 @@ print(g.grade(59));
 - **验树(本节唯一新增防线)**:`ui.append` 的树是数据、脚本可手搓 —— 物化前必须全量过白名单校验(标签/属性/style/URL/class token,与模板 IR 同一套校验器)
 - **禁用清单**:`innerHTML`/`insertAdjacentHTML` 任何形态、裸节点与裸事件对象跨界、挂载根之外的操作、`createElement` 类工厂直通、命令返回 DOM 值
 
+### 16.7 伪后端路由(Django 风格,纯数据路由表)
+
+程序契约:`router.ajs` 的 return **只有路由表** —— 纯数据、全字符串、英文全拼字段,不含任何函数与模板定义;处理函数独立成 `.ajs` 文件(其程序返回值即函数),模板独立成 `.html` 文件或内联串。
+
+**字段(六条)**:
+
+| 字段 | 规则 |
+|---|---|
+| `domain` | **必填**;域名或 IP 形式均可(`mygame.os`、`127.0.0.1`) |
+| `subdomain` | 省略 = 没有;匹配采用通用后缀规则:主机等于 `domain`、或以 `.domain` 结尾(多出的前缀必须与 `subdomain` 相等)—— 域名与 IP 无需分别处理 |
+| `port` | 省略 = 默认端口(URL 不写端口或写 `:80`);写了必须精确相等 |
+| `path` | 必填;`<名字>` 提取文字参数、`<number:名字>` 提取数字参数(不匹配则整条不命中);`path: "*"` 仅可作某域名下最后一条,是该域名的**兜底页(作者自定义 404)** |
+| `script` | 省略 = 纯 HTML 模式,直接渲染模板;写 = `.ajs` 文件名字符串或函数名字符串(解析规则:同名 `.ajs` 文件) |
+| `template` | 文件名(以 `.html` 结尾)或内联模板源码串;列表则由函数返回 `template: 第几个` 选择 |
+
+**处理函数契约**:独立 `.ajs` 文件,程序返回值即函数,签名 `(args, progress)`:
+
+- `args`:URL 传参 —— 路径参数与 `?` 查询串参数合并为一个对象;值的类型由 pattern 决定(`<名字>` 文字、`<number:名字>` 数字)
+- `progress`:进度快照(store 深拷贝,第 10 节边界原样;**渲染只读**,写回能力未来以注入方式提供)
+- 返回 `{ template: 索引, data: 数据 }`
+
+**平台职责(匹配 + 三条简单校验 + 兜底)**:
+
+1. 挂载校验:路由表字段齐全、pattern 语法合法、`script` 引用的文件存在且返回函数、`template`(文件与内联串同规)全部过白名单编译
+2. 分发:按序匹配(domain 后缀规则 + subdomain + port + path)→ 载入 script → 调用 → 按返回索引取模板 → 渲染
+3. 兜底:未命中(且无 `path: "*"` 条目)、函数抛错、返回不合法(索引越界等)→ 平台默认 404 页;错误信息用第 9 节的错误串格式
+
+平台侧没有任何路由逻辑可被攻击 —— 路由决策的输入是宿主解析的 URL 与挂载时已校验的静态表,函数的返回值被限定在模板列表索引内。一级域名 → 应用的归属仍由 webos 安装清单决定。dev 模式提供 console 面板,`print` 输出与错误串均可见(作者调试出口)。
+
+**样例(已过编译器与分发验证)**:
+
+```
+// router.ajs
+return [
+  { domain: "mygame.os", path: "/", template: "home.html" },
+  { domain: "mygame.os", path: "/level/<level>/", script: "quest", template: ["quest.html", "locked.html"] },
+  { domain: "mygame.os", subdomain: "wiki", path: "/", template: "wiki.html" },
+  { domain: "mygame.os", port: 8080, path: "/", script: "admin", template: "admin.html" },
+  { domain: "mygame.os", path: "*", template: "my404.html" },
+  { domain: "127.0.0.1", path: "/", template: "local.html" },
+];
+
+// quest.ajs —— 处理函数文件
+return (args, progress) => {
+  if (progress.chapter < 3) {
+    return { template: 1, data: { required: 3 } };      // 按进度选第 2 个模板
+  }
+  return { template: 0, data: { level: args.level, tab: args.tab } };
+};
+```
+
+分发实测:`mygame.os/level/q2/` @2章 → `locked.html`;@5章 → `quest.html`(data 带 `level`/`tab`);`wiki.mygame.os/` → 子域条目;`mygame.os:8080/` → 端口条目,`mygame.os:9999/` → 兜底;`127.0.0.1/` → IP 主域名条目。
+
+
 ## 附录 A:迭代决策记录
 
 | 轮次 | 决策 |
@@ -383,6 +438,7 @@ print(g.grade(59));
 | 10 | **执行机制定案:blob 模块**(B.2):编译产物包为 ES 模块经 Blob URL 动态 `import()` 加载,编译异步、执行同步;CSP 放行 `blob:`、不开 `unsafe-eval`,与 16.4 兜底共存(16.4 的 CSP 行相应补 `blob:`)。场景定位:游戏作者网页工具,事件级渲染频率使 Worker 克隆往返不划算,Worker 降为备用;nonce 判定不采用(静态 CSP 死结 + DOM 外泄/不记名通行证等风险,记录为服务端场景可用) |
 | 11 | **实现落地 + 文法勘误**:let 初始化值、三元分支、数组/对象元素由 Assign 更正为 Expr(与脚注 ¹"赋值仅语句位与 for 头"一致,消除文法与脚注的自相矛盾);构造顺序勘误确认:字段 → 方法(不含 constructor)→ constructor 赋值,故 keys(实例) 序为"声明字段、方法、构造器赋值键"。实现:110 例测试全绿,样例与编译产物落 examples/compiled |
 | 12 | **DOM 控制通道入规格(16.6)与实现**:能力句柄(ref 属性 + mountTree 铸造,函数值跨界、单元素能力、失效即拒)、窄命令集 ui.*(值校验与模板同一来源)、事件数据快照跨界、append 前验树(手搓树是预期攻击面)、`return (refs) => {}` 程序契约。实现中发现并修复:style 值字符集曾放行 `url(`(补禁令,封外传通道);箭头试探回退吞掉体内真错(补 sawArrow 守卫);命令名 `class` 撞关键字更名 `ui.cls`(属性名仍不接受关键字,子集原则不变)。测试 120 例全绿 |
+| 13 | **伪后端路由定稿(16.7)**:Django 风格纯数据路由表 —— `domain` 必填(域名/IP 均可)、`subdomain` 通配后缀规则、`port` 精确匹配(省略=默认端口)、`path` 参数(`<名字>`/`<number:名字>`)与 `path: "*"` 兜底(作者自定义 404)、`script` 省略即纯 HTML 页、`template` 文件名或内联串(列表由函数选索引);处理函数独立文件,直收 `(args, progress)`,渲染只读; 命名原则:英文全拼、不用缩写、不用上下文对象(面向不懂编程的作者)。平台仅匹配 + 三条挂载校验 + 兜底,无路由逻辑可攻击; 进度写回与跳转不做,需要时以能力注入方式引入。样例经编译器与分发验证 |
 
 ## 附录 B:实现方案调研(非规范性,不含实施承诺)
 

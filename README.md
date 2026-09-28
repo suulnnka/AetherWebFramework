@@ -1,8 +1,10 @@
-# AetherJS
+# AetherWebFramework
 
-webos 的安全脚本语言:**JavaScript 的安全子集,编译为 ES 模块产物**(浏览器 Blob URL / Node data: URL 动态 import 加载,非 eval)+ **伪 SSR 模板引擎**(白名单文法 → IR → 类型化槽渲染)。
+webos 的沙盒网站框架:**AetherJS 语言**(JavaScript 的安全子集,编译为 ES 模块产物,浏览器 Blob URL / Node data: URL 动态 import 加载,非 eval)+ **伪 SSR 模板引擎**(白名单文法 → IR → 类型化槽渲染)+ **Django 风格路由**(纯数据路由表)+ **DOM 控制通道**(能力句柄 + 窄命令集)。
 
-规范文档:**[docs/language-spec-v0.2.md](docs/language-spec-v0.2.md)**(十轮迭代定稿,含宿主框架与渲染边界、实现方案调研)—— 语言语义以该文档为准。
+命名:框架叫 **AetherWebFramework**(与 AetherWebOS / AetherWebDatabase 同族),作者写的语言叫 **AetherJS** —— Django 之于 Python 的关系。
+
+规范文档:**[docs/language-spec-v0.2.md](docs/language-spec-v0.2.md)**(十三轮迭代定稿,含宿主框架与渲染边界、路由、实现方案调研)—— 语言与框架语义以该文档为准。
 
 ## 快速上手
 

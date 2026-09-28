@@ -1,8 +1,8 @@
 {
-  "name": "aetherjs",
+  "name": "aether-webframework",
   "version": "0.2.0",
   "type": "module",
-  "description": "AetherJS v0.2 —— webos 安全脚本语言(JS 安全子集,编译为 ES 模块产物经 blob/data 加载)+ 伪 SSR 模板引擎;实现对应 docs/language-spec-v0.2.md 十轮定稿",
+  "description": "AetherWebFramework —— webos 的沙盒网站框架(语言 AetherJS:JS 安全子集,编译为 ES 模块产物经 blob/data 加载)+ 伪 SSR 模板 + 路由 + DOM 通道;规格见 docs/language-spec-v0.2.md",
   "main": "src/index.js",
   "exports": {
     ".": "./src/index.js",

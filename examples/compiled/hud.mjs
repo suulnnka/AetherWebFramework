@@ -28,50 +28,28 @@ export default function (AETHER) {
   var print = AETHER.g.print;
   var ui = AETHER.g.ui;
   var $r;
-  let quests = [$obj([
-  ["id", "q1"],
-  ["name", "迷雾森林"],
-  ["level", 3],
-  ["hot", true],
-  ["tone", "#586"]
-]), $obj([
-  ["id", "q2"],
-  ["name", "沉没神殿"],
-  ["level", 7],
-  ["hot", true],
-  ["tone", "#b30"]
-]), $obj([
-  ["id", "q3"],
-  ["name", "草原试炼"],
-  ["level", 1],
-  ["hot", false],
-  ["tone", "#586"]
-]), $obj([
-  ["id", "q4"],
-  ["name", "星之塔"],
-  ["level", 9],
-  ["hot", false],
-  ["tone", "#b30"]
-])];
-  let Summary = $class("Summary", [["total", function () { return 0; }], ["maxLevel", function () { return 0; }]], [["constructor", function (quests) {
-  for (const q of $iter(quests)) {
-    ((o) => $set(o, "total", $add($get(o, "total"), 1)))(this);
-    if ($test($gt($get(q, "level"), $get(this, "maxLevel")))) {
-      $set(this, "maxLevel", $get(q, "level"));
-    }
-  }
-}], ["headline", function () {
-  return $add($add($call(str, [$get(this, "total")]), " 个关卡,最高 Lv."), $call(str, [$get(this, "maxLevel")]));
-}]]);
-  let s = $new(Summary, [quests]);
-  return $obj([
-  ["title", "选择关卡"],
-  ["headline", $mcall(s, "headline", [])],
-  ["player", $obj([
-  ["name", "Alice"],
-  ["hp", 76]
-])],
-  ["quests", quests]
-]);
+  return ((refs) => {
+let hp = 76;
+$mcall(ui, "on", [$get(refs, "heal"), "click", ((ev) => {
+(hp = $add(hp, 5));
+if ($test($gt(hp, 100))) {
+(hp = 100);
+}
+$mcall(ui, "text", [$get(refs, "hp"), $add("HP ", $call(str, [hp]))]);
+$mcall(ui, "cls", [$get(refs, "hp"), "toggle", "flash"]);
+if ($test($ge(hp, 100))) {
+$mcall(ui, "style", [$get(refs, "hp"), "color", "#b30"]);
+$mcall(ui, "text", [$get(refs, "heal"), "已满"]);
+}
+})]);
+$mcall(ui, "on", [$get(refs, "hit"), "click", ((ev) => {
+(hp = $sub(hp, 12));
+if ($test($lt(hp, 0))) {
+(hp = 0);
+}
+$mcall(ui, "text", [$get(refs, "hp"), $add("HP ", $call(str, [hp]))]);
+$mcall(ui, "style", [$get(refs, "hp"), "color", ($test($lt(hp, 30)) ? "#b30" : "#2a5")]);
+})]);
+});
   return $r;
 }

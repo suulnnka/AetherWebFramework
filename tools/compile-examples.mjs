@@ -24,7 +24,7 @@ mkdirSync(outDir, { recursive: true });
 
 for (const f of readdirSync(join(here, 'examples')).filter((x) => x.endsWith('.ajs'))) {
   const src = readFileSync(join(here, 'examples', f), 'utf8');
-  const p = compile(src, { globals: ['print'] });
+  const p = compile(src, { globals: ['print', 'ui'] });
   const out = join(outDir, f.replace(/\.ajs$/, '.mjs'));
   writeFileSync(out, p.code);
   console.log(`✓ ${f} → examples/compiled/${basename(out)}`);

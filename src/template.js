@@ -30,8 +30,44 @@ export const TAGS = new Set([
 
 const VOID_TAGS = new Set(['br', 'img']);
 
-const GLOBAL_ATTRS = new Set(['class', 'id', 'title', 'style']);
+const GLOBAL_ATTRS = new Set(['class', 'id', 'title', 'style', 'ref']);
 const TAG_ATTRS = { a: new Set(['href']), img: new Set(['src', 'alt']) };
+
+/* 白名单校验(导出给 ui.js 复用 —— 单一事实来源,规格 16.2/16.3/16.6) */
+
+export function checkAttr(tag, name) {
+  if (name.startsWith('on')) return `禁止属性 ${name}(on* 一律不存在)`;
+  if (GLOBAL_ATTRS.has(name)) return null;
+  if (TAG_ATTRS[tag]?.has(name)) return null;
+  if (name.startsWith('data-')) return null;
+  return `属性 ${name} 不在白名单(标签 <${tag}>)`;
+}
+
+export function checkUrlValue(v) {
+  if (typeof v !== 'string') return `URL 槽必须是 string`;
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(v) || v.startsWith('//')) {
+    return `禁止外部资源 "${v}"(仅相对路径)`;
+  }
+  return null;
+}
+
+export function checkStyleProp(prop) {
+  return STYLE_PROPS.has(prop) ? null : `style 属性 "${prop}" 不在白名单`;
+}
+
+export function checkStyleValue(prop, v) {
+  if (typeof v !== 'string' || !STYLE_VALUE_RE.test(v)) {
+    return `style 值含非法字符`;
+  }
+  if (/url\s*\(/i.test(v)) {
+    return `style 值不允许 url()(禁外链即禁外传,规格 16.3)`;
+  }
+  return null;
+}
+
+export function checkClassToken(token) {
+  return /^[A-Za-z0-9_-]+$/.test(token) ? null : `class 名 "${token}" 不合法(仅 [A-Za-z0-9_-])`;
+}
 
 /** style 属性白名单 + 值字符集(结构上封死 CSS 注入:无 ; : " ' url() 等字符) */
 const STYLE_PROPS = new Set([

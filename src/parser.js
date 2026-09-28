@@ -500,12 +500,16 @@ export function parse(tokens) {
 
   function parseParenOrArrow() {
     const save = pos;
+    let sawArrow = false;
     try {
       const params = parseParams();
       expectP('=>', '"=>"');
+      sawArrow = true;
       return finishArrow(params, peek().line);
     } catch (e) {
-      if (!(e instanceof Error) || e.name !== 'CompileError') throw e;
+      // 仅在尚未确认是箭头(未见到 =>)时回退为括号表达式;
+      // 箭头体内的错误是真实错误,吞掉会变成误导信息
+      if (!(e instanceof Error) || e.name !== 'CompileError' || sawArrow) throw e;
       pos = save;
     }
     expectP('(', '"("');

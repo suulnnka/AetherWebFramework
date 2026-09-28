@@ -26,6 +26,7 @@ export default function (AETHER) {
   var merge = AETHER.g.merge;
   var fixed = AETHER.g.fixed;
   var print = AETHER.g.print;
+  var ui = AETHER.g.ui;
   var $r;
   let scores = [72, 91, 55, 84, 68];
   let total = 0;

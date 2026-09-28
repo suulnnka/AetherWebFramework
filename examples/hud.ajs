@@ -1,0 +1,24 @@
+// DOM 控制通道示例(规格 16.6):
+// 声明式出结构(模板),命令式做高频更新(句柄)。
+// 程序契约:return (refs) => { … } —— init 由宿主在挂载后调用。
+return (refs) => {
+  let hp = 76;
+
+  ui.on(refs.heal, "click", (ev) => {
+    hp = hp + 5;
+    if (hp > 100) { hp = 100; }
+    ui.text(refs.hp, "HP " + str(hp));
+    ui.cls(refs.hp, "toggle", "flash");
+    if (hp >= 100) {
+      ui.style(refs.hp, "color", "#b30");
+      ui.text(refs.heal, "已满");
+    }
+  });
+
+  ui.on(refs.hit, "click", (ev) => {
+    hp = hp - 12;
+    if (hp < 0) { hp = 0; }
+    ui.text(refs.hp, "HP " + str(hp));
+    ui.style(refs.hp, "color", hp < 30 ? "#b30" : "#2a5");
+  });
+};

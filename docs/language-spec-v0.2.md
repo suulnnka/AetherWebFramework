@@ -1,7 +1,7 @@
 # AetherJS v0.2 语言设计规格(定稿)
 
 > **状态**:设计定稿,**未实施**。仓库中现有代码为 v0.1 实现,与本规格不一致;本规格是对 v0.1 的反魔法重设计,是否实施、何时实施另议。
-> **定稿时间**:2026-09-28,经十一轮迭代收敛(第 11 轮:v0.2 实现落地)。
+> **定稿时间**:2026-09-28,经十二轮迭代收敛(第 11 轮:v0.2 实现落地;第 12 轮:DOM 控制通道)。
 > **子集原则**(第 5 轮确立):AetherJS 是 JS 的子集 —— 保留的特性行为必须与 JS 一致;与 JS 不一致的用法只能**砍掉**(编译错),不能改写语义。
 
 ## 0. 定位与非目标
@@ -322,7 +322,7 @@ print(g.grade(59));
 ### 16.2 模板编译期安全
 
 - **白名单标签**:`div span p h1-h6 ul ol li table thead tbody tr td th b i em strong br a img`;白名单由单一事实来源定义,宿主可裁剪,扩充即承担重新审计责任
-- **白名单属性**:`class id title` 与 `data-*` 及少数语义属性;**一切 `on*` 属性在文法中不存在**(不是检测后删,是产生式不接受);`script style link meta iframe object embed base form` 同理不存在
+- **白名单属性**:`class id title ref` 与 `data-*` 及少数语义属性;**一切 `on*` 属性在文法中不存在**(不是检测后删,是产生式不接受);`script style link meta iframe object embed base form` 同理不存在
 - **文法严于 HTML**:属性引号强制、标签必须闭合、无注释、无 DOCTYPE、无 raw text 模式 —— 文法是 HTML 的严格子集,凡通过者语义唯一,解析器差异类攻击(mXSS)无落点
 - **插值表达式复用 AetherJS 编译器**:`{{user.name + "!"}}` 按 AetherJS 严格表达式编译,白名单标识符、严格类型、无 eval 全部适用
 - **模板逻辑最小化**:仅 `each`/`if` 微逻辑;复杂逻辑在脚本中组装数据后传入
@@ -356,6 +356,17 @@ print(g.grade(59));
 - **渲染循环**(响应式环)与资源耗尽同属第 7 轮出域方针,语言不设防,宿主自备处置
 - **视觉伪装**(脚本画假 webos 界面骗输入)是内容信任问题,归窗口信任模型,不在本边界职责内
 
+### 16.6 DOM 控制通道(能力句柄 + 窄命令集)
+
+允许脚本命令式操作 DOM,但**摸不到真实节点** —— 只持有宿主铸造的不透明句柄:
+
+- **refs 铸造**:模板元素声明 `ref="hp"`(属性白名单成员,宿主机制、不落 DOM);宿主 `mountTree(树)` 验树、物化(createElement/textContent,`innerHTML` 全程不存在)并铸造句柄表;程序契约为 `return (refs) => { … }` —— init 函数作为程序返回值交给宿主调用
+- **句柄即能力**:以函数值形态跨界(天然按引用传递);不可调用(调用即 `type` 错)、不可伪造;解析时校验"仍连接且在本挂载根内",失效句柄一律 `access` 拒绝 —— 单元素能力,越界结构上不可能
+- **命令集**(值的校验与 16.2/16.3 同一来源,无第二套规则):`ui.text(h, s)`(textContent)、`ui.attr(h, k, v)`(属性白名单 + href/src 相对路径)、`ui.style(h, prop, v)`(属性级白名单 + 字符集,值禁 `url(`)、`ui.cls(h, add|remove|toggle, token)`(token 限 `[A-Za-z0-9_-]+`)、`ui.show/hide(h)`、`ui.append(h, 树)`(见下)、`ui.remove(h)`、`ui.on(h, 事件类型, 回调)`(事件类型白名单:click/dblclick/keydown/keyup/mouseenter/mouseleave/input/change)
+- **事件回调跨界**:回调收到**数据快照** `{type, key, x, y, altKey, ctrlKey}`,裸 Event 不跨界;回调内的语言错误以 AetherError 交宿主(`onScriptError`),不裸抛
+- **验树(本节唯一新增防线)**:`ui.append` 的树是数据、脚本可手搓 —— 物化前必须全量过白名单校验(标签/属性/style/URL/class token,与模板 IR 同一套校验器)
+- **禁用清单**:`innerHTML`/`insertAdjacentHTML` 任何形态、裸节点与裸事件对象跨界、挂载根之外的操作、`createElement` 类工厂直通、命令返回 DOM 值
+
 ## 附录 A:迭代决策记录
 
 | 轮次 | 决策 |
@@ -371,6 +382,7 @@ print(g.grade(59));
 | 9 | **实现方案调研入附录 B**(非规范性,不含任何实施承诺);重要发现:16.4 的 CSP 兜底与运行时 `new Function` 存在张力,候选解法已列,实施前需验证 |
 | 10 | **执行机制定案:blob 模块**(B.2):编译产物包为 ES 模块经 Blob URL 动态 `import()` 加载,编译异步、执行同步;CSP 放行 `blob:`、不开 `unsafe-eval`,与 16.4 兜底共存(16.4 的 CSP 行相应补 `blob:`)。场景定位:游戏作者网页工具,事件级渲染频率使 Worker 克隆往返不划算,Worker 降为备用;nonce 判定不采用(静态 CSP 死结 + DOM 外泄/不记名通行证等风险,记录为服务端场景可用) |
 | 11 | **实现落地 + 文法勘误**:let 初始化值、三元分支、数组/对象元素由 Assign 更正为 Expr(与脚注 ¹"赋值仅语句位与 for 头"一致,消除文法与脚注的自相矛盾);构造顺序勘误确认:字段 → 方法(不含 constructor)→ constructor 赋值,故 keys(实例) 序为"声明字段、方法、构造器赋值键"。实现:110 例测试全绿,样例与编译产物落 examples/compiled |
+| 12 | **DOM 控制通道入规格(16.6)与实现**:能力句柄(ref 属性 + mountTree 铸造,函数值跨界、单元素能力、失效即拒)、窄命令集 ui.*(值校验与模板同一来源)、事件数据快照跨界、append 前验树(手搓树是预期攻击面)、`return (refs) => {}` 程序契约。实现中发现并修复:style 值字符集曾放行 `url(`(补禁令,封外传通道);箭头试探回退吞掉体内真错(补 sawArrow 守卫);命令名 `class` 撞关键字更名 `ui.cls`(属性名仍不接受关键字,子集原则不变)。测试 120 例全绿 |
 
 ## 附录 B:实现方案调研(非规范性,不含实施承诺)
 

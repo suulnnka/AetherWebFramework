@@ -11,5 +11,7 @@ export { compile, createRuntime, makeAether, importModule } from './runtime.js';
 export {
   parseTemplate, compileTemplate, treeToHtml, checkHtml,
   withTemplateHelpers, renderTemplate, TAGS,
+  checkAttr, checkUrlValue, checkStyleProp, checkStyleValue, checkClassToken,
 } from './template.js';
+export { validateTree, materialize, createUiController } from './ui.js';
 export { AetherError, CompileError } from './errors.js';

@@ -4,10 +4,11 @@
  * 禁用总表(编译拒绝)、类型分派与模板边界(运行时拦截)。
  */
 
-import { createRuntime, compile, makeAether } from '../src/index.js';
+import { createRuntime, compile, makeAether, createUiController, validateTree } from '../src/index.js';
 import { compileTemplate, treeToHtml, withTemplateHelpers } from '../src/template.js';
 import { importModule } from '../src/runtime.js';
 import { AetherError, CompileError } from '../src/errors.js';
+import { createDoc } from './domshim.mjs';
 
 let pass = 0, fail = 0;
 const failed = [];
@@ -520,6 +521,139 @@ test('同源缓存与重复执行', async () => {
   const { rt } = makeRt();
   eq(await rt.run('let x = 1; x + 1;'), 2);
   eq(await rt.run('let x = 1; x + 1;'), 2);
+});
+
+/* ============ DOM 控制通道(规格 16.6) ============ */
+
+function makeUi() {
+  const doc = createDoc();
+  const root = doc.makeRoot();
+  const scriptErrors = [];
+  const ctl = createUiController({ mount: root, doc, onScriptError: (e) => scriptErrors.push(e) });
+  return { doc, root, ctl, ui: ctl.ui, scriptErrors };
+}
+
+function accessThrow(fn, note) {
+  try { fn(); } catch (e) {
+    if (e instanceof AetherError && (e.kind === 'access' || e.kind === 'type')) return e;
+    throw new Error(`${note}:期望 access/type,实际 ${e}`);
+  }
+  throw new Error(`${note}:应当抛错`);
+}
+
+const T = (tag, attrs = {}, children = [], style = {}) => ({ tag, attrs, children, style });
+
+test('验树:script/on*/白名单外属性/style/外链/class 全拒', () => {
+  accessThrow(() => validateTree(T('script')), 'script');
+  accessThrow(() => validateTree(T('div', { onclick: 'x' })), 'on*');
+  accessThrow(() => validateTree(T('div', { tabindex: '1' })), '属性');
+  accessThrow(() => validateTree(T('div', {}, [], { behavior: 'x' })), 'style 属性');
+  accessThrow(() => validateTree(T('a', { href: 'http://x' })), '外链');
+  accessThrow(() => validateTree(T('div', { class: 'a b"' })), 'class token');
+  validateTree(T('div', { id: 'a' }, ['t'], { color: 'red' })); // 合法树通过
+});
+test('mountTree 铸造句柄,ref 不落 DOM', () => {
+  const { root } = makeUi();
+  const { ctl } = makeUi();
+  void root;
+  const refs = ctl.mountTree(T('div', { id: 'hud' }, [
+    T('p', { ref: 'hp' }, ['HP 76'], { color: '#356' }),
+  ]));
+  if (typeof refs.hp !== 'function') throw new Error('句柄应为不透明函数值');
+});
+test('ui.text/attr/style/class/show/hide', () => {
+  const { ctl, ui } = makeUi();
+  const refs = ctl.mountTree(T('p', { ref: 'p', class: 'a' }, ['x']));
+  ui.text(refs.p, 'HP 99');
+  ui.attr(refs.p, 'title', 't1');
+  ui.style(refs.p, 'color', 'red');
+  ui.cls(refs.p, 'toggle', 'low');
+  ui.hide(refs.p);
+  const el = ctl.mountTree; // noop 引用
+  void el;
+  accessThrow(() => ui.attr(refs.p, 'onclick', 'x'), 'on*');
+  accessThrow(() => ui.attr(refs.p, 'class', 'a b"'), 'class token');
+  accessThrow(() => ui.style(refs.p, 'behavior', 'x'), 'style');
+  accessThrow(() => ui.style(refs.p, 'color', 'url(x)'), 'style 值');
+  accessThrow(() => ui.attr(refs.p, 'href', '//e/x'), '外链(p 无 href 白名单)');
+});
+test('ui.append:合法树通过,手搓假树全拒', () => {
+  const { ctl, ui } = makeUi();
+  const refs = ctl.mountTree(T('div', { ref: 'box' }, []));
+  ui.append(refs.box, T('span', {}, ['hi']));
+  accessThrow(() => ui.append(refs.box, T('script', {}, ['x'])), 'script');
+  accessThrow(() => ui.append(refs.box, T('div', { onclick: 'x' })), 'on*');
+  accessThrow(() => ui.append(refs.box, T('a', { href: 'javascript:x' })), '外链');
+});
+test('ui.remove 后句柄失效', () => {
+  const { ctl, ui } = makeUi();
+  const refs = ctl.mountTree(T('p', { ref: 'p' }, ['x']));
+  ui.remove(refs.p);
+  accessThrow(() => ui.text(refs.p, 'y'), '失效句柄');
+});
+test('句柄不可调用', () => {
+  const { ctl } = makeUi();
+  const refs = ctl.mountTree(T('p', { ref: 'p' }, ['x']));
+  try { refs.p(); } catch (e) {
+    if (e instanceof AetherError && e.kind === 'type') return;
+    throw e;
+  }
+  throw new Error('句柄调用应抛 type');
+});
+test('事件类型白名单', () => {
+  const { ctl, ui } = makeUi();
+  const refs = ctl.mountTree(T('p', { ref: 'p' }, ['x']));
+  accessThrow(() => ui.on(refs.p, 'wheel', () => 1), 'wheel');
+});
+test('端到端:沙盒程序经句柄改 DOM + 事件回调', async () => {
+  const doc = createDoc();
+  const root = doc.makeRoot();
+  const scriptErrors = [];
+  const ctl = createUiController({ mount: root, doc, onScriptError: (e) => scriptErrors.push(e) });
+  const out = [];
+  const rt = createRuntime({ print: (...a) => out.push(a.join(' ')), ui: ctl.ui });
+
+  // 模板渲染出的树 → mount
+  const tplCode = compileTemplate('<div id="hud"><p ref="hp">HP 76</p><a ref="btn" href="next.html">升级</a></div>');
+  const tplMod = await importModule(tplCode);
+  const tree = await tplMod.default(withTemplateHelpers(makeAether(Object.create(null))), {});
+  const refs = ctl.mountTree(tree);
+
+  // 程序返回 init(refs),注册事件
+  const init = await rt.run(`
+    return (refs) => {
+      ui.on(refs.btn, "click", (ev) => {
+        ui.text(refs.hp, "点了 x=" + str(ev.x));
+        ui.cls(refs.hp, "add", "flash");
+      });
+    };
+  `);
+  if (typeof init !== 'function') throw new Error('程序应返回 init 函数');
+  init(refs);
+
+  const btn = root.children[0].children.find((c) => c.getAttribute?.('ref') === undefined && c.tagName === 'A');
+  btn.dispatch('click', { clientX: 7 });
+
+  const hp = root.children[0].children.find((c) => c.tagName === 'P');
+  if (hp.textContent !== '点了 x=7') throw new Error(`实际:${hp.textContent}`);
+  if (!hp.classList.contains('flash')) throw new Error('class 未生效');
+});
+test('事件回调中的语言错误交宿主(AetherError 原样)', async () => {
+  const doc = createDoc();
+  const root = doc.makeRoot();
+  const scriptErrors = [];
+  const ctl = createUiController({ mount: root, doc, onScriptError: (e) => scriptErrors.push(e) });
+  const rt = createRuntime({ ui: ctl.ui });
+  const refs = ctl.mountTree(T('p', { ref: 'b' }, ['x']));
+  const init = await rt.run('return (refs) => { ui.on(refs.b, "click", (ev) => { 1 + "a"; }); };');
+  init(refs);
+  root.children[0].dispatch('click');
+  if (scriptErrors.length !== 1 || !(scriptErrors[0] instanceof AetherError) || scriptErrors[0].kind !== 'type') {
+    throw new Error(`onScriptError 未收到语言错误:${JSON.stringify(scriptErrors.map(String))}`);
+  }
+});
+test('ref 属性进入模板白名单', () => {
+  compileTemplate('<p ref="a" id="x">t</p>'); // 编译通过即通过
 });
 
 /* ============ 汇总 ============ */

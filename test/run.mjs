@@ -442,6 +442,35 @@ test('URL 槽:外链拒绝', async () => {
     if (!threw) throw new Error(`外链未被拒绝:${bad}`);
   }
 });
+test('安全审查:URL 槽 —— 浏览器规范化绕过全拒(前导空白/控制字符/反斜杠)', async () => {
+  for (const bad of [' javascript:alert(1)', 'java\nscript:alert(1)', 'java\tscript:alert(1)', '\\/evil.com/x', '\\\\evil.com\\x']) {
+    let threw = false;
+    try { await render('<a href="{{it.l}}">x</a>', { l: bad }); } catch (e) { threw = e.kind === 'access'; }
+    if (!threw) throw new Error(`规范化绕过未被拒绝:${JSON.stringify(bad)}`);
+  }
+});
+test('安全审查:URL 槽 —— 多段拼接无法组装 scheme', async () => {
+  let threw = false;
+  try { await render('<a href="{{it.a}}:alert(1)">x</a>', { a: 'javascript' }); } catch (e) { threw = e.kind === 'access'; }
+  if (!threw) throw new Error('分段拼接绕过未被拒绝');
+});
+test('安全审查:URL 槽 —— 值含引号不破属性(校验后转义)', async () => {
+  const html = await render('<a href="{{it.l}}">x</a>', { l: 'x" onmouseover="alert(1)' });
+  if (html.includes('" onmouseover')) throw new Error(`属性注入成功:${html}`);
+  if (!html.includes('&quot;')) throw new Error(`引号未转义:${html}`);
+});
+test('安全审查:静态外链编译期拒绝(href/src,含反斜杠形态)', async () => {
+  for (const bad of [
+    '<img src="http://e/x.png">',
+    '<a href="javascript:alert(1)">x</a>',
+    '<a href="\\/e/x">x</a>',
+    '<a href="data:text/html,x">x</a>',
+  ]) {
+    let threw = false;
+    try { compileTemplate(bad); } catch (e) { threw = e instanceof CompileError; }
+    if (!threw) throw new Error(`静态外链未被拒绝:${bad}`);
+  }
+});
 test('style 属性级白名单', async () => {
   eq(await render('<p style="color: {{it.c}}; font-size: 14px;">x</p>', { c: 'red' }),
     '<p style="color: red; font-size: 14px">x</p>');
@@ -654,6 +683,323 @@ test('事件回调中的语言错误交宿主(AetherError 原样)', async () => 
 });
 test('ref 属性进入模板白名单', () => {
   compileTemplate('<p ref="a" id="x">t</p>'); // 编译通过即通过
+});
+
+/* ============ 伪后端路由(规格 16.7,含 condition) ============ */
+
+import { mountRouter, compileCondition } from '../src/index.js';
+
+const P = (s) => `<p>${s}</p>`; // 最小合法模板
+const mount = (routes, opts = {}) => mountRouter(routes, opts);
+const expectMountFail = async (routes, want, opts) => {
+  try {
+    await mount(routes, opts);
+  } catch (e) {
+    if (!(e instanceof CompileError)) throw new Error(`应为 CompileError,实际 ${e?.name}: ${e?.message}`);
+    if (want && !e.message.includes(want)) {
+      throw new Error(`错误信息不符:期望包含 "${want}",实际 "${e.message}"`);
+    }
+    return e;
+  }
+  throw new Error(`应当挂载失败,但通过了:${JSON.stringify(routes).slice(0, 80)}`);
+};
+
+test('路由:挂载校验 —— 未知字段 / 缺 domain / path 不合法', async () => {
+  await expectMountFail([{ domain: 'a.os', path: '/', typo: 1 }], '未知字段');
+  await expectMountFail([{ path: '/' }], 'domain 必填');
+  await expectMountFail([{ domain: 'a.os', path: 'no-slash' }], '以 / 开头');
+  await expectMountFail('not-array', '数组');
+});
+
+test('路由:挂载校验 —— path:"*" 只能作同域名最后一条', async () => {
+  await expectMountFail([
+    { domain: 'a.os', path: '*', template: P('404') },
+    { domain: 'a.os', path: '/', template: P('home') },
+  ], '最后一条');
+});
+
+test('路由:挂载校验 —— 模板过白名单编译', async () => {
+  await expectMountFail([{ domain: 'a.os', path: '/', template: '<input value="x">' }], '白名单');
+});
+
+test('路由:挂载校验 —— script 必须存在且返回函数', async () => {
+  await expectMountFail([{ domain: 'a.os', path: '/', script: 'h', template: P('x') }], '无法载入');
+  await expectMountFail(
+    [{ domain: 'a.os', path: '/', script: 'h', template: P('x') }],
+    '必须是函数',
+    { loadScript: async () => 'return 42;' },
+  );
+});
+
+test('路由:condition 编译校验(语法错 / 禁调用 / 禁赋值侧效)', async () => {
+  await expectMountFail([{ domain: 'a.os', path: '/', condition: 'score >', template: P('x') }]); // 语法错,任意 CompileError
+  await expectMountFail([{ domain: 'a.os', path: '/', condition: 'num(score) > 9', template: P('x') }], '函数调用');
+  await expectMountFail([{ domain: 'a.os', path: '/', condition: 'score = 9', template: P('x') }]);
+  // 纯比较/逻辑组合合法
+  compileCondition('score + bonus >= 20 && name !== "bob"');
+});
+
+test('路由:域名 / 路径基础匹配与纯 HTML 模式', async () => {
+  const r = await mount([{ domain: 'a.os', path: '/', template: P('home') }]);
+  eq((await r.dispatch('https://a.os/')).html, '<p>home</p>');
+  eq((await r.dispatch('https://A.OS/')).status, 200); // 主机名大小写不敏感
+  eq((await r.dispatch('https://other.os/')).status, 404);
+});
+
+test('路由:子域通用后缀规则', async () => {
+  const r = await mount([
+    { domain: 'mygame.os', subdomain: 'wiki', path: '/', template: P('wiki') },
+    { domain: 'mygame.os', path: '/', template: P('main') },
+  ]);
+  eq((await r.dispatch('https://wiki.mygame.os/')).html, '<p>wiki</p>');
+  eq((await r.dispatch('https://mygame.os/')).html, '<p>main</p>');
+  eq((await r.dispatch('https://forum.mygame.os/')).status, 404); // 未声明的前缀不命中
+});
+
+test('路由:端口匹配(省略 = 默认;写则精确)', async () => {
+  const r = await mount([
+    { domain: 'a.os', port: 8080, path: '/', template: P('admin') },
+    { domain: 'a.os', path: '/', template: P('default') },
+  ]);
+  eq((await r.dispatch('https://a.os:8080/')).html, '<p>admin</p>');
+  eq((await r.dispatch('https://a.os/')).html, '<p>default</p>');
+  eq((await r.dispatch('https://a.os:9999/')).status, 404);
+});
+
+test('路由:路径参数 <名> 文字、<number:名> 数字;数字不匹配整条不命中', async () => {
+  // 参数经处理函数并入模板数据(script 省略 = 纯 HTML 模式,无数据,规格 16.7)
+  const r = await mount([
+    { domain: 'a.os', path: '/level/<level>/', script: 'h', template: '{{it.level}}' },
+    { domain: 'a.os', path: '/hp/<number:hp>/', script: 'h', template: '{{it.hp}}' },
+  ], { loadScript: async () => 'return (args, progress) => { return { template: 0, data: args }; };' });
+  eq((await r.dispatch('https://a.os/level/q2/')).html, 'q2');
+  const hp = await r.dispatch('https://a.os/hp/42/');
+  eq(hp.html, '42');
+  eq(hp.data.hp, 42); // pattern 决定类型
+  eq((await r.dispatch('https://a.os/hp/abc/')).status, 404); // 非数字 → 整条不命中
+});
+
+test('路由:查询串参数并入 args', async () => {
+  const r = await mount([
+    { domain: 'a.os', path: '/level/<level>/', script: 'h', template: '{{it.level}}|{{it.tab}}' },
+  ], { loadScript: async () => 'return (args, progress) => { return { template: 0, data: { level: args.level, tab: args.tab } }; };' });
+  eq((await r.dispatch('https://a.os/level/q2/?tab=map')).html, 'q2|map');
+});
+
+test('路由:处理函数选模板索引', async () => {
+  const r = await mount([
+    { domain: 'a.os', path: '/q/', script: 'h', template: [P('a'), P('b')] },
+  ], { loadScript: async () => 'return (args, progress) => { return { template: 1, data: {} }; };' });
+  eq((await r.dispatch('https://a.os/q/')).html, '<p>b</p>');
+});
+
+test('路由:condition 成立命中,不成立落向下一条(叠层)', async () => {
+  const r = await mount([
+    { domain: 'a.os', path: '/ending/', condition: 'score > 9', template: P('gold') },
+    { domain: 'a.os', path: '/ending/', condition: 'score > 3', template: P('good') },
+    { domain: 'a.os', path: '/ending/', template: P('normal') },
+  ]);
+  eq((await r.dispatch('https://a.os/ending/', { score: 12 })).html, '<p>gold</p>');
+  eq((await r.dispatch('https://a.os/ending/', { score: 5 })).html, '<p>good</p>');
+  eq((await r.dispatch('https://a.os/ending/', { score: 1 })).html, '<p>normal</p>');
+});
+
+test('路由:condition 混型比较 → false + 日志,不炸分发', async () => {
+  const logs = [];
+  const r = await mount([
+    { domain: 'a.os', path: '/', condition: 'score > 9', template: P('hi') },
+    { domain: 'a.os', path: '/', template: P('fallback') },
+  ], { log: (m) => logs.push(m) });
+  eq((await r.dispatch('https://a.os/', { score: '12' })).html, '<p>fallback</p>');
+  if (!logs.some((m) => m.includes('type') && m.includes('视为不成立'))) {
+    throw new Error(`混型应记日志:${JSON.stringify(logs)}`);
+  }
+});
+
+test('路由:condition 缺键(undefined 参与比较)→ false + 日志', async () => {
+  const logs = [];
+  const r = await mount([
+    { domain: 'a.os', path: '/', condition: 'level > 2', template: P('x') },
+  ], { log: (m) => logs.push(m) });
+  eq((await r.dispatch('https://a.os/', {})).status, 404);
+  if (!logs.some((m) => m.includes('视为不成立'))) throw new Error('缺键应记日志');
+  // 显式判存在是合法写法
+  const r2 = await mount([
+    { domain: 'a.os', path: '/', condition: 'best !== undefined', template: P('has') },
+  ]);
+  eq((await r2.dispatch('https://a.os/', {})).status, 404);
+  eq((await r2.dispatch('https://a.os/', { best: 1 })).html, '<p>has</p>');
+});
+
+test('路由:condition 结果非 boolean → false + 日志(=== 混型是合法 boolean,不记日志)', async () => {
+  const logs = [];
+  const r = await mount([
+    { domain: 'a.os', path: '/', condition: 'hp', template: P('x') }, // 取出数字,非 boolean
+    { domain: 'a.os', path: '/', condition: 'name === "alice"', template: P('eq') },
+    { domain: 'a.os', path: '*', template: P('star') },
+  ], { log: (m) => logs.push(m) });
+  eq((await r.dispatch('https://a.os/', { hp: 3, name: 'bob' })).html, '<p>star</p>');
+  if (!logs.some((m) => m.includes('非 boolean'))) throw new Error('非 boolean 应记日志');
+  logs.length = 0;
+  eq((await r.dispatch('https://a.os/', { hp: 3, name: 'alice' })).html, '<p>eq</p>'); // === 异型恒 false,同型相等为 true
+  if (logs.some((m) => m.includes('"name ==='))) throw new Error(`=== 判等不应记日志:${JSON.stringify(logs)}`);
+});
+
+test('路由:condition 成员链与逻辑组合', async () => {
+  const r = await mount([
+    { domain: 'a.os', path: '/', condition: 'player.level >= 3 && player.vip === true', template: P('vip') },
+    { domain: 'a.os', path: '*', template: P('normal') },
+  ]);
+  eq((await r.dispatch('https://a.os/', { player: { level: 5, vip: true } })).html, '<p>vip</p>');
+  eq((await r.dispatch('https://a.os/', { player: { level: 5, vip: false } })).html, '<p>normal</p>');
+});
+
+test('路由:上下顺序优先(先匹配先生效)', async () => {
+  const r = await mount([
+    { domain: 'a.os', path: '/x/', condition: 'flag === true', template: P('first') },
+    { domain: 'a.os', path: '/x/', condition: 'flag === true', template: P('second') }, // 同条件,永不触达
+  ]);
+  eq((await r.dispatch('https://a.os/x/', { flag: true })).html, '<p>first</p>');
+});
+
+test('路由:处理函数抛错 / 索引越界 → 平台 404', async () => {
+  const logs = [];
+  const boom = await mount([
+    { domain: 'a.os', path: '/', script: 'h', template: P('x') },
+  ], { loadScript: async () => 'return (args, progress) => { 1 + "a"; };', log: (m) => logs.push(m) });
+  eq((await boom.dispatch('https://a.os/')).status, 404);
+  if (!logs.some((m) => m.includes('404'))) throw new Error('渲染失败应记日志');
+
+  const oob = await mount([
+    { domain: 'a.os', path: '/', script: 'h', template: [P('a')] },
+  ], { loadScript: async () => 'return (args, progress) => { return { template: 7, data: {} }; };', log: () => {} });
+  eq((await oob.dispatch('https://a.os/')).status, 404);
+});
+
+test('路由:同域 path:"*" 兜底接住条件全不成立', async () => {
+  const r = await mount([
+    { domain: 'a.os', path: '/vip/', condition: 'score > 99', template: P('vip') },
+    { domain: 'a.os', path: '*', template: '<h1>404</h1><p>作者自定义</p>' },
+  ]);
+  const res = await r.dispatch('https://a.os/vip/', { score: 1 });
+  eq(res.status, 200);
+  if (!res.html.includes('作者自定义')) throw new Error(`应命中兜底页:${res.html}`);
+});
+
+test('路由:处理函数看到的是 progress 深拷贝快照(写入不回传)', async () => {
+  const r = await mount([
+    { domain: 'a.os', path: '/', script: 'h', template: '{{it.n}}' },
+  ], { loadScript: async () => 'return (args, progress) => { progress.n = progress.n + 1; return { template: 0, data: { n: progress.n } }; };' });
+  const store = { n: 1 };
+  eq((await r.dispatch('https://a.os/', store)).html, '2');
+  eq(store.n, 1); // 宿主 store 不被沙盒写入改动
+  eq((await r.dispatch('https://a.os/', store)).html, '2'); // 每次分发重建快照
+});
+
+test('路由:path 末段 * 前缀认领子树(段对齐,不捕获余段)', async () => {
+  const r = await mount([
+    { domain: 'a.os', path: '/wiki/*', template: P('tree') },
+  ]);
+  eq((await r.dispatch('https://a.os/wiki/')).status, 200);
+  eq((await r.dispatch('https://a.os/wiki')).status, 200); // 子树根本身
+  eq((await r.dispatch('https://a.os/wiki/a/b/')).html, '<p>tree</p>');
+  eq((await r.dispatch('https://a.os/wikix/')).status, 404); // 段对齐:不吞相邻前缀
+  eq((await r.dispatch('https://a.os/other/')).status, 404);
+});
+
+test('路由:path 通配与参数组合(<lang>/*),具体规则排通配之前', async () => {
+  const r = await mount([
+    { domain: 'a.os', path: '/docs/api/', template: P('api') },
+    { domain: 'a.os', path: '/docs/<lang>/*', script: 'h', template: '{{it.lang}}' },
+  ], { loadScript: async () => 'return (args, progress) => { return { template: 0, data: { lang: args.lang } }; };' });
+  eq((await r.dispatch('https://a.os/docs/api/')).html, '<p>api</p>'); // 更具体,排在上面先命中
+  eq((await r.dispatch('https://a.os/docs/en/guide/intro/')).html, 'en');
+  eq((await r.dispatch('https://a.os/docs/en/')).html, 'en');
+});
+
+test('路由:挂载校验 —— /* 与中段 * 拒绝', async () => {
+  await expectMountFail([{ domain: 'a.os', path: '/*', template: P('x') }], 'path: "*"');
+  await expectMountFail([{ domain: 'a.os', path: '/a/*/b/', template: P('x') }], '末段');
+});
+
+test('路由:subdomain "*" 任意单级前缀(裸域与多级前缀不命中)', async () => {
+  const r = await mount([
+    { domain: 'a.os', subdomain: 'wiki', path: '/', template: P('wiki') },
+    { domain: 'a.os', subdomain: '*', path: '/', template: P('tenant') },
+    { domain: 'a.os', path: '/', template: P('bare') },
+  ]);
+  eq((await r.dispatch('https://wiki.a.os/')).html, '<p>wiki</p>');   // 具体子域排在通配之前
+  eq((await r.dispatch('https://alice.a.os/')).html, '<p>tenant</p>');
+  eq((await r.dispatch('https://a.os/')).html, '<p>bare</p>');        // 裸域只属于省略 subdomain 的条目
+  eq((await r.dispatch('https://a.b.a.os/')).status, 404);            // 多级前缀不命中
+});
+
+test('路由:挂载校验 —— subdomain 多级/非法标签拒绝', async () => {
+  await expectMountFail([{ domain: 'a.os', subdomain: 'x.y', path: '/', template: P('x') }], '单级标签');
+});
+
+/* ============ Worker 后端(规格 18 轮:后端执行进 Worker) ============ */
+
+import { createWorkerBackend } from '../src/worker-host.js';
+
+test('Worker 后端:执行/快照语义/print 单向转发', async () => {
+  const logs = [];
+  const be = await createWorkerBackend({ onLog: (t) => logs.push(t) });
+  const src = 'return (args, progress) => { print("hi"); progress.n = progress.n + 1; return { template: 0, data: { n: progress.n, a: args.x } }; };';
+  await be.load(src); // 编译 + 验证返回函数
+  const store = { n: 1 };
+  const v = await be.call(src, { x: 7 }, store);
+  eq(v.data.n, 2);
+  eq(v.data.a, 7);
+  eq(store.n, 1); // 克隆入:Worker 内写入不回传宿主
+  if (!logs.includes('hi')) throw new Error(`print 未转发:${JSON.stringify(logs)}`);
+  await be.terminate();
+});
+
+test('Worker 后端:编译错与运行时错以错误形状回传', async () => {
+  const be = await createWorkerBackend();
+  try {
+    await be.load('return (');
+    throw new Error('编译错未被拒绝');
+  } catch (e) {
+    if (!(e instanceof AetherError) || e.kind !== 'syntax') throw new Error(`编译错形状不对:${e}`);
+  }
+  try {
+    await be.call('return (args, progress) => { 1 + "a"; };', {}, {});
+    throw new Error('运行时错未被拒绝');
+  } catch (e) {
+    if (!(e instanceof AetherError) || e.kind !== 'type') throw new Error(`运行时错形状不对:${e}`);
+  }
+  await be.terminate();
+});
+
+test('Worker 后端:超时强杀死循环,且惰性重生', async () => {
+  const be = await createWorkerBackend();
+  const t0 = Date.now();
+  try {
+    await be.call('return (args, progress) => { while (true) { 1 + 1; } };', {}, {}, 300);
+    throw new Error('死循环未被超时终止');
+  } catch (e) {
+    if (!(e instanceof AetherError) || e.kind !== 'limit') throw new Error(`超时错误形状不对:${e}`);
+    if (Date.now() - t0 > 3000) throw new Error('终止过慢');
+  }
+  const v = await be.call('return (args, progress) => { return { template: 0, data: {} }; };', {}, {}); // 重生后可复用
+  eq(v.template, 0);
+  await be.terminate();
+});
+
+test('Worker 后端:路由分发全链路(runScript 执行器)', async () => {
+  const be = await createWorkerBackend({ onLog: () => {} });
+  const r = await mount([
+    { domain: 'a.os', path: '/q/<level>/', condition: 'chapter >= 2', script: 'h', template: '{{it.level}}' },
+    { domain: 'a.os', path: '/q/<level>/', template: P('locked') },
+  ], {
+    loadScript: async () => 'return (args, progress) => { print("q"); return { template: 0, data: { level: args.level } }; };',
+    runScript: { load: (s) => be.load(s), call: (s, a, p) => be.call(s, a, p) },
+  });
+  eq((await r.dispatch('https://a.os/q/x9/', { chapter: 5 })).html, 'x9'); // 条件 + Worker 内处理
+  eq((await r.dispatch('https://a.os/q/x9/', { chapter: 1 })).html, '<p>locked</p>');
+  await be.terminate();
 });
 
 /* ============ 汇总 ============ */

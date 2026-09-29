@@ -1,0 +1,9 @@
+// 类 Google 搜索引擎 · 路由表(纯数据,规格 16.7)
+// 访问:http://localhost:3010/google.com/(第一段路径 = 虚拟主机名)
+// /doodles/ 由 condition 守护:progress.json 里 doodles 为 true 才生效,否则落到 * 兜底。
+return [
+  { domain: "google.com", path: "/", template: "home.html" },
+  { domain: "google.com", path: "/search/", script: "search", template: ["results.html"] },
+  { domain: "google.com", path: "/doodles/", condition: "doodles === true", template: "doodles.html" },
+  { domain: "google.com", path: "*", template: "notfound.html" },
+];

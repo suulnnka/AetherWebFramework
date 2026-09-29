@@ -25,7 +25,6 @@ export default function (AETHER) {
   var copy = AETHER.g.copy;
   var merge = AETHER.g.merge;
   var fixed = AETHER.g.fixed;
-  var print = AETHER.g.print;
   var ui = AETHER.g.ui;
   var $r;
   return ((refs) => {

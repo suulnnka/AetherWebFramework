@@ -1,0 +1,137 @@
+// 类 Google 搜索引擎 · /search/ 处理函数(规格 16.7 契约:args → { template, data })
+// args.q 即 ?q=… 查询串;打分与摘要算法同 examples/search.ajs(沙盒无 import,内联同源副本)。
+
+let pages = [
+  { title: "AetherJS 语言规格 v0.2", url: "docs/lang.html",
+    text: "AetherJS 是 JavaScript 的安全子集:全严格运算符、null 原型对象、编译期标识符白名单,编译为 ES 模块产物。规格经十五轮迭代定稿。" },
+  { title: "模板引擎:白名单文法与类型化槽", url: "docs/template.html",
+    text: "模板是程序不是字符串:白名单文法解析为 IR,值只进类型化槽。href 与 src 校验非转义,仅允许相对路径,外部资源一律拒绝。" },
+  { title: "DOM 控制通道:句柄与窄命令集", url: "docs/dom.html",
+    text: "脚本摸不到真实节点,只持有宿主铸造的不透明句柄;ui 命令的值与模板共用同一套白名单校验。" },
+  { title: "伪后端路由(Django 风格)", url: "docs/route.html",
+    text: "路由表是纯数据:domain、subdomain、port、path 参数与 path 星号兜底,外加 condition 进度条件。处理函数收 args 与 progress,返回模板索引与数据。" },
+  { title: "AetherWebOS:浏览器里的操作系统", url: "index.html",
+    text: "窗口管理、文件管家、Markdown 编辑器与应用商店,全部跑在浏览器里;不可信脚本经 AetherJS 沙盒执行。" },
+  { title: "宿主边界隔离:五层安全模型", url: "docs/security.html",
+    text: "数据入界深拷贝为 null 原型快照,函数按引用注入,程序返回值是唯一数据出口;宿主异常跨界仅保留 message。" },
+  { title: "AetherWebDatabase 入门", url: "db/intro.html",
+    text: "同族项目:AetherWebDatabase 提供浏览器内的持久化存储,与 AetherWebOS 桌面应用共享生态。" },
+  { title: "零依赖编译器手记", url: "blog/zero-dep.html",
+    text: "手写词法加递归下降解析,拒绝解析器生成器与完整 JS 解析器裁剪:白名单哲学之下,黑名单裁剪漏一种节点即漏洞。" },
+  { title: "类与 this:子集原则的试金石", url: "blog/class.html",
+    text: "class 保留 JS 语法与语义:new 必填、this 仅类成员体合法、方法提取后 this 为 undefined;不做继承,复用用组合。" },
+  { title: "应用商店上架指南", url: "store/publish.html",
+    text: "webos 应用清单、一级域名归属与 dev 模式调试面板;print 输出与错误串在 console 面板可见。" },
+];
+
+function words(query) {
+  let out = [];
+  for (const w of query.toLowerCase().split(" ")) {
+    const t = w.trim();
+    if (t !== "") { out.push(t); }
+  }
+  return out;
+}
+
+function countHits(haystack, term) {
+  if (term === "") { return 0; }
+  let n = 0;
+  let at = haystack.indexOf(term);
+  while (at >= 0) {
+    n += 1;
+    at = haystack.indexOf(term, at + term.length);
+  }
+  return n;
+}
+
+class Engine {
+  pages = [];
+  constructor(pages) { this.pages = pages; }
+
+  score(page, terms) {
+    let s = 0;
+    const title = page.title.toLowerCase();
+    const text = page.text.toLowerCase();
+    for (const term of terms) {
+      const inTitle = countHits(title, term);
+      const inText = countHits(text, term);
+      if (inTitle + inText === 0) { return 0; }
+      s += inTitle * 8 + inText * 2;
+    }
+    return s;
+  }
+
+  snippet(page, terms) {
+    const text = page.text;
+    const lower = text.toLowerCase();
+    let first = -1;
+    for (const term of terms) {
+      const at = lower.indexOf(term);
+      if (at >= 0 && (first < 0 || at < first)) { first = at; }
+    }
+    if (first < 0) { return [{ text: text, hit: false }]; }
+    const start = Math.max(0, first - 10);
+    const end = Math.min(text.length, start + 60);
+    const win = text.slice(start, end);
+    const wlower = win.toLowerCase();
+    let marks = [];
+    for (let i = 0; i < win.length; i += 1) { marks.push(false); }
+    for (const term of terms) {
+      let at = wlower.indexOf(term);
+      while (at >= 0) {
+        for (let i = at; i < at + term.length && i < marks.length; i += 1) { marks[i] = true; }
+        at = wlower.indexOf(term, at + term.length);
+      }
+    }
+    let segs = [];
+    let buf = "";
+    let cur = false;
+    for (let i = 0; i < win.length; i += 1) {
+      if (marks[i] !== cur) {
+        if (buf !== "") { segs.push({ text: buf, hit: cur }); }
+        buf = "";
+        cur = marks[i];
+      }
+      buf += win.charAt(i);
+    }
+    if (buf !== "") { segs.push({ text: buf, hit: cur }); }
+    if (start > 0) { segs.unshift({ text: "…", hit: false }); }
+    if (end < text.length) { segs.push({ text: "…", hit: false }); }
+    return segs;
+  }
+
+  search(query) {
+    const terms = words(query);
+    let scored = [];
+    for (const page of this.pages) {
+      const s = this.score(page, terms);
+      if (s > 0) { scored.push({ page: page, score: s }); }
+    }
+    scored.sort((a, b) => b.score - a.score);
+    let out = [];
+    for (const r of scored) {
+      out.push({ title: r.page.title, url: r.page.url, segs: this.snippet(r.page, terms) });
+    }
+    return out;
+  }
+}
+
+const engine = new Engine(pages);
+
+return (args, progress) => {
+  let query = "";
+  if (typeOf(args.q) === "string") { query = args.q.trim(); }
+  print("[search] q=" + (query === "" ? "(空)" : query));
+  const results = engine.search(query);
+  return {
+    template: 0,
+    data: {
+      query: query,
+      hasQuery: query !== "",
+      hasResults: results.length > 0,
+      count: results.length,
+      secs: fixed(Math.random() / 4 + 0.01, 3),
+      results: results,
+    },
+  };
+};

@@ -1,0 +1,171 @@
+// 实时搜索(DOM 控制通道,规格 16.6):敲键即搜,Enter 定格,Esc 清空。
+// 模板只给结构(搜索框/统计行/结果区,带 ref),内容全部由 ui.* 命令就地更新;
+// 结果列表用手搓树整批重建 —— 先 ui.text 置空清掉旧子树,再 ui.append 追加
+// (append 物化前全量过白名单验树,手搓树正是 16.6 的预期通道)。
+// 沙盒无 import,打分逻辑与 search.ajs 同源、此处内联精简版。
+return (refs) => {
+  let pages = [
+    { title: "AetherJS 语言规格 v0.2", url: "docs/lang.html",
+      text: "AetherJS 是 JavaScript 的安全子集:全严格运算符与编译期白名单。" },
+    { title: "模板引擎:白名单文法与类型化槽", url: "docs/template.html",
+      text: "模板按程序编译为 IR,值只进类型化槽,外部资源一律拒绝。" },
+    { title: "DOM 控制通道:句柄与窄命令集", url: "docs/dom.html",
+      text: "脚本摸不到真实节点,只持有宿主铸造的不透明句柄。" },
+    { title: "伪后端路由", url: "docs/route.html",
+      text: "路由表是纯数据,处理函数收 args 与 progress 返回数据。" },
+    { title: "AetherWebOS:浏览器里的操作系统", url: "index.html",
+      text: "窗口、文件管家与应用商店,不可信脚本经沙盒执行。" },
+    { title: "宿主边界隔离:五层安全模型", url: "docs/security.html",
+      text: "数据入界深拷贝快照,返回值是唯一出口。" },
+  ];
+
+  let query = "";
+  let pinned = false;   // Enter 后定格,Esc 解除
+
+  function countHits(haystack, term) {
+    if (term === "") { return 0; }
+    let n = 0;
+    let at = haystack.indexOf(term);
+    while (at >= 0) {
+      n += 1;
+      at = haystack.indexOf(term, at + term.length);
+    }
+    return n;
+  }
+
+  function search(q) {
+    let terms = [];
+    for (const w of q.toLowerCase().split(" ")) {
+      const t = w.trim();
+      if (t !== "") { terms.push(t); }
+    }
+    let scored = [];
+    for (const page of pages) {
+      const title = page.title.toLowerCase();
+      const text = page.text.toLowerCase();
+      let s = 0;
+      for (const term of terms) {
+        const inTitle = countHits(title, term);
+        const inText = countHits(text, term);
+        if (inTitle + inText === 0) { s = 0; break; }
+        s += inTitle * 8 + inText * 2;
+      }
+      if (s > 0) { scored.push({ page: page, score: s }); }
+    }
+    scored.sort((a, b) => b.score - a.score);
+    return { scored: scored, terms: terms };
+  }
+
+  /** 摘要片段序列(与 search.ajs 同算法,窗口 60 字) */
+  function snippet(text, terms) {
+    const lower = text.toLowerCase();
+    let first = -1;
+    for (const term of terms) {
+      const at = lower.indexOf(term);
+      if (at >= 0 && (first < 0 || at < first)) { first = at; }
+    }
+    if (first < 0) { return [{ text: text, hit: false }]; }
+    const start = Math.max(0, first - 10);
+    const end = Math.min(text.length, start + 60);
+    const win = text.slice(start, end);
+    const wlower = win.toLowerCase();
+    let marks = [];
+    for (let i = 0; i < win.length; i += 1) { marks.push(false); }
+    for (const term of terms) {
+      let at = wlower.indexOf(term);
+      while (at >= 0) {
+        for (let i = at; i < at + term.length && i < marks.length; i += 1) { marks[i] = true; }
+        at = wlower.indexOf(term, at + term.length);
+      }
+    }
+    let segs = [];
+    let buf = "";
+    let cur = false;
+    for (let i = 0; i < win.length; i += 1) {
+      if (marks[i] !== cur) {
+        if (buf !== "") { segs.push({ text: buf, hit: cur }); }
+        buf = "";
+        cur = marks[i];
+      }
+      buf += win.charAt(i);
+    }
+    if (buf !== "") { segs.push({ text: buf, hit: cur }); }
+    if (start > 0) { segs.unshift({ text: "…", hit: false }); }
+    if (end < text.length) { segs.push({ text: "…", hit: false }); }
+    return segs;
+  }
+
+  function render() {
+    ui.text(refs.q, query === "" ? "请输入关键词…" : query + (pinned ? "" : "_"));
+    const res = search(query);
+    ui.text(refs.results, "");                    // 置空即清掉旧结果子树
+    if (query === "") {
+      ui.text(refs.stats, "");
+      return;
+    }
+    if (res.scored.length === 0) {
+      ui.text(refs.stats, "找到约 0 条结果");
+      ui.append(refs.results, {
+        tag: "p",
+        attrs: { "class": "empty" },
+        style: { "color": "#4d5156", "margin": "60px 0 0 0" },
+        children: ["找不到和您查询相符的内容。"],
+      });
+      return;
+    }
+    ui.text(refs.stats, "找到约 " + str(res.scored.length) + " 条结果" + (pinned ? " · 已定格(Esc 重新输入)" : ""));
+
+    const limit = Math.min(res.scored.length, 6);
+    const items = [];
+    for (let i = 0; i < limit; i += 1) {
+      const r = res.scored[i];
+      const segParts = [];
+      for (const seg of snippet(r.page.text, res.terms)) {
+        if (seg.hit) {
+          segParts.push({ tag: "b", attrs: {}, style: {}, children: [seg.text] });
+        } else {
+          segParts.push(seg.text);
+        }
+      }
+      items.push({
+        tag: "li",
+        attrs: { "class": "hit" },
+        style: { "margin": "20px 0" },
+        children: [
+          { tag: "p", attrs: { "class": "url" },
+            style: { "color": "#0d652d", "font-size": "13px", "margin": "2px 0" },
+            children: [r.page.url] },
+          { tag: "p", attrs: { "class": "title" },
+            style: { "margin": "2px 0" },
+            children: [
+              { tag: "a", attrs: { "href": r.page.url },
+                style: { "color": "#1a0dab", "font-size": "17px", "text-decoration": "none" },
+                children: [r.page.title] },
+            ] },
+          { tag: "p", attrs: { "class": "snippet" },
+            style: { "color": "#4d5156", "font-size": "13px", "line-height": "1.6" },
+            children: segParts },
+        ],
+      });
+    }
+    ui.append(refs.results, { tag: "ol", attrs: {}, style: {}, children: items });
+  }
+
+  ui.on(refs.q, "keydown", (ev) => {
+    if (ev.key === "Enter") {
+      pinned = true;
+    } else if (ev.key === "Backspace") {
+      query = query.slice(0, query.length - 1);
+      pinned = false;
+    } else if (ev.key === "Escape") {
+      query = "";
+      pinned = false;
+    } else if (ev.key.length === 1) {
+      query = query + ev.key;
+      pinned = false;
+    }
+    render();
+  });
+
+  render();
+};

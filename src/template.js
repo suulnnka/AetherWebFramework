@@ -45,7 +45,12 @@ export function checkAttr(tag, name) {
 
 export function checkUrlValue(v) {
   if (typeof v !== 'string') return `URL 槽必须是 string`;
-  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(v) || v.startsWith('//')) {
+  // 在"浏览器规范化后的形态"上判定:URL 解析前会剔除首尾空白与 \t\n\r、把 \ 当 /,
+  // 否则 " javascript:x"、"java\nscript:x"、"\\/evil.com" 可绕过(单一事实来源,规格 16.3)
+  if (v.includes('\\')) return `URL 值不允许反斜杠 "${v}"(浏览器会当作路径分隔符)`;
+  if (/[\u0000-\u001F\u007F]/.test(v)) return `URL 值不允许控制字符`;
+  const norm = v.trim();
+  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(norm) || norm.startsWith('//')) {
     return `禁止外部资源 "${v}"(仅相对路径)`;
   }
   return null;
@@ -78,12 +83,10 @@ const STYLE_PROPS = new Set([
 ]);
 const STYLE_VALUE_RE = /^[0-9a-zA-Z#%.,()\s-]{1,100}$/;
 
-/** URL 槽:仅相对路径(禁一切 scheme 与协议相对 //,16.3) */
+/** URL 槽:仅相对路径(禁一切 scheme 与协议相对 //,16.3);判定逻辑与 checkUrlValue 单一来源 */
 function urlSlot(v) {
-  if (typeof v !== 'string') throw new AetherError('access', `URL 槽必须是 string,实际 ${v === null ? 'null' : typeof v}`);
-  if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(v) || v.startsWith('//')) {
-    throw new AetherError('access', `禁止外部资源 "${v}"(仅相对路径,规格 16.3)`);
-  }
+  const bad = checkUrlValue(v);
+  if (bad) throw new AetherError('access', bad);
   return v;
 }
 
@@ -230,6 +233,10 @@ export function parseTemplate(src) {
       }
       const allowed = GLOBAL_ATTRS.has(name) || (TAG_ATTRS[tag]?.has(name)) || name.startsWith('data-');
       if (!allowed) err(`属性 ${name} 不在白名单(规格 16.2)`, start);
+      if ((name === 'href' || name === 'src') && !raw.includes('{{')) {
+        const ub = checkUrlValue(raw); // 纯静态值编译期即拒(混合段由运行期整值校验兜底)
+        if (ub) err(ub, start);
+      }
       attrs.push({ name, parts: splitSlots(raw) });
     }
     if (VOID_TAGS.has(tag)) {
@@ -377,7 +384,15 @@ export function compileTemplate(src, opts = {}) {
       }
       case 'el': {
         const attrEntries = p.attrs.map((a) => {
-          const wrap = (a.name === 'href' || a.name === 'src') ? (js) => `$url($str(${js}))` : (js) => `$escA($str(${js}))`;
+          if (a.name === 'href' || a.name === 'src') {
+            // URL 槽:原始段拼接 → 整体校验($url:分段拼不出 scheme)→ 属性转义($escA:引号封死,
+            // 值含 " 也越不出属性 —— html 字符串导出路径(如 serve.mjs)同样安全,规格 16.3)
+            const segs = a.parts.map((p) =>
+              p.t === 'text' ? quote(p.text) : slotCall(p, bindings, (js) => `$str(${js})`));
+            const joined = segs.length === 0 ? "''" : segs.length === 1 ? segs[0] : '(' + segs.join(' + ') + ')';
+            return `[${quote(a.name)}, $escA($url(${joined}))]`;
+          }
+          const wrap = (js) => `$escA($str(${js}))`;
           return `[${quote(a.name)}, ${attrValue(a.parts, bindings, wrap)}]`;
         });
         const styleEntries = (p.style ?? []).map((d) =>
@@ -445,8 +460,12 @@ export function checkHtml(html) {
     for (const a of el.attributes) {
       const n = a.name.toLowerCase();
       if (n.startsWith('on')) bad.push(`属性 ${n}`);
-      if ((n === 'href' || n === 'src') && (/[a-zA-Z][a-zA-Z0-9+.-]*:/.test(a.value) || a.value.startsWith('//'))) {
-        bad.push(`外链 ${a.value}`);
+      if (n === 'href' || n === 'src') {
+        // 与 checkUrlValue 同一规范化形态复检(空白/控制字符/反斜杠不可绕过)
+        const uv = a.value.replace(/[\t\n\r]/g, '').trim().replace(/\\/g, '/');
+        if (/[a-zA-Z][a-zA-Z0-9+.-]*:/.test(uv) || uv.startsWith('//')) {
+          bad.push(`外链 ${a.value}`);
+        }
       }
     }
     for (const c of el.children) walk(c);

@@ -15,7 +15,8 @@
   },
   "scripts": {
     "test": "node test/run.mjs",
-    "build:examples": "node tools/compile-examples.mjs"
+    "build:examples": "node tools/compile-examples.mjs",
+    "start": "node tools/serve.mjs"
   },
   "license": "MIT",
   "repository": {

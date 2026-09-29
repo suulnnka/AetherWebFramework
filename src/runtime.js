@@ -261,6 +261,11 @@ function copyBuiltin(x) {
   return deepCopy(x, new Map());
 }
 
+/** 宿主数据 → 沙盒入界快照(深拷贝 null 原型、环安全;函数按引用,规格 10) */
+export function snapshotOf(x) {
+  return deepCopy(x, new Map());
+}
+
 function mergeBuiltin(a, b) {
   if (typeOfV(a) !== 'object' || typeOfV(b) !== 'object') {
     throw t('type', `merge() 要求两个 object,实际 ${typeOfV(a)} / ${typeOfV(b)}`);

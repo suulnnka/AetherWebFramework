@@ -1,8 +1,8 @@
 # AetherWebFramework 规格文档(语言:AetherJS v0.2)(定稿)
 
 > **项目**:AetherWebFramework —— webos 的沙盒网站框架(与 AetherWebOS / AetherWebDatabase 同族);**语言**:AetherJS v0.2,Django 之于 Python 的关系。
-> **状态**:规格与实现同步 —— 语言、模板引擎、DOM 控制通道已实现(`src/`,120 例测试),路由(16.7)规格定稿待实现。
-> **定稿时间**:2026-09-28,经十三轮迭代收敛(第 11 轮:实现落地;第 12 轮:DOM 控制通道;第 13 轮:伪后端路由)。
+> **状态**:规格与实现同步 —— 语言、模板引擎、DOM 控制通道、伪后端路由(16.7,含 condition 与通配)均已实现;后端脚本执行已 Worker 化(18 轮)。`src/`,153 例测试。
+> **定稿时间**:2026-09-28,经十八轮迭代收敛(第 11 轮:实现落地;第 12 轮:DOM 控制通道;第 13 轮:伪后端路由;第 14 轮:路由实现落地 + condition 进度条件;第 15 轮:路由通配;第 16 轮:安全审查修复;第 17 轮:DOM 通道脚本定案主线程;第 18 轮:后端执行进 Worker)。
 > **子集原则**(第 5 轮确立):AetherJS 是 JS 的子集 —— 保留的特性行为必须与 JS 一致;与 JS 不一致的用法只能**砍掉**(编译错),不能改写语义。
 
 ## 0. 定位与非目标
@@ -336,7 +336,7 @@ print(g.grade(59));
 |---|---|
 | 文本槽 | 转义 `<` `&`(文本节点内即可) |
 | 属性值槽 | 转义引号/`&` + 属性级约束 |
-| `href`/`src` 槽 | **校验而非转义**:结果必须为相对路径;`http:` `https:` `javascript:` `data:` `//` 开头一律拒绝(禁外部任何资源条文的落点,同时消灭外传通道) |
+| `href`/`src` 槽 | **校验而非转义**:结果必须为相对路径;`http:` `https:` `javascript:` `data:` `//` 开头一律拒绝(禁外部任何资源条文的落点,同时消灭外传通道)。校验在**浏览器规范化后的形态**上判定(首尾空白剔除、`\t\n\r` 移除、`\` 当 `/`)且对**整条拼接值**进行 —— 多段插值拼不出 scheme,空白/控制字符/反斜杠不可绕过;校验后再做属性转义,值含引号也越不出属性 |
 | `style` | 无字符串槽;样式在 IR 中为属性级节点(如 `color: <值槽>`),值按属性白名单文法校验,拼 CSS 字符串的路径不存在 |
 
 挂载走 IR → DOM API(`createElement`/`setAttribute`),`innerHTML` 全管线不出现;`html()` 字符串导出仅供日志/预览,不参与挂载。
@@ -367,21 +367,23 @@ print(g.grade(59));
 - **事件回调跨界**:回调收到**数据快照** `{type, key, x, y, altKey, ctrlKey}`,裸 Event 不跨界;回调内的语言错误以 AetherError 交宿主(`onScriptError`),不裸抛
 - **验树(本节唯一新增防线)**:`ui.append` 的树是数据、脚本可手搓 —— 物化前必须全量过白名单校验(标签/属性/style/URL/class token,与模板 IR 同一套校验器)
 - **禁用清单**:`innerHTML`/`insertAdjacentHTML` 任何形态、裸节点与裸事件对象跨界、挂载根之外的操作、`createElement` 类工厂直通、命令返回 DOM 值
+- **执行线程(第 17 轮定案)**:页面动态脚本在**主线程同步执行,不进 Worker** —— 同步 DOM 能力过线程界只有两条路(命令队列异步化改时序语义,或 SAB 阻塞 RPC),均不值;渲染环/死循环导致的页面卡死**归作者责任**(第 7 轮资源防护出域方针在交互场景的延续)。Worker 备用路线仅保留给伪 SSR/路由线(纯函数边界,天然可迁移,需要时另行实施,见 B.2)
 
 ### 16.7 伪后端路由(Django 风格,纯数据路由表)
 
 程序契约:`router.ajs` 的 return **只有路由表** —— 纯数据、全字符串、英文全拼字段,不含任何函数与模板定义;处理函数独立成 `.ajs` 文件(其程序返回值即函数),模板独立成 `.html` 文件或内联串。
 
-**字段(六条)**:
+**字段(七条)**:
 
 | 字段 | 规则 |
 |---|---|
 | `domain` | **必填**;域名或 IP 形式均可(`mygame.os`、`127.0.0.1`) |
-| `subdomain` | 省略 = 没有;匹配采用通用后缀规则:主机等于 `domain`、或以 `.domain` 结尾(多出的前缀必须与 `subdomain` 相等)—— 域名与 IP 无需分别处理 |
+| `subdomain` | 省略 = 没有;匹配采用通用后缀规则:主机等于 `domain`、或以 `.domain` 结尾(多出的前缀必须与 `subdomain` 相等)—— 域名与 IP 无需分别处理;`subdomain: "*"` = 任意**单级**前缀(多级前缀与裸域不命中;裸域只属于省略 subdomain 的条目;具体子域条目应排在通配之前) |
 | `port` | 省略 = 默认端口(URL 不写端口或写 `:80`);写了必须精确相等 |
-| `path` | 必填;`<名字>` 提取文字参数、`<number:名字>` 提取数字参数(不匹配则整条不命中);`path: "*"` 仅可作某域名下最后一条,是该域名的**兜底页(作者自定义 404)** |
-| `script` | 省略 = 纯 HTML 模式,直接渲染模板;写 = `.ajs` 文件名字符串或函数名字符串(解析规则:同名 `.ajs` 文件) |
+| `path` | 必填;`<名字>` 提取文字参数、`<number:名字>` 提取数字参数(不匹配则整条不命中);**末段 `*` = 前缀认领子树**(`/wiki/*` 匹配 `/wiki`、`/wiki/a/b` 等全部,段对齐、不捕获余段;仅允许末段,`/*` 不合法);`path: "*"` 仅可作某域名下最后一条,是该域名的**兜底页(作者自定义 404)**;通配与具体规则并存时,更具体的应排在通配之前(顺序即优先级,作者保证) |
+| `script` | 省略 = 纯 HTML 模式,直接渲染模板(无数据);写 = `.ajs` 文件名字符串或函数名字符串(解析规则:同名 `.ajs` 文件) |
 | `template` | 文件名(以 `.html` 结尾)或内联模板源码串;列表则由函数返回 `template: 第几个` 选择 |
+| `condition` | 省略 = 无条件;值为 **AetherJS 严格表达式串**(编译管线同模板插值,规格 16.2):裸标识符一律解析为 `progress` 的键(仅 `undefined`/`NaN`/`Infinity` 保留字面),禁函数调用/new/赋值等一切副作用语法(纯数据谓词);挂载期编译校验,分发期求值结果必须是 boolean —— **非 boolean 或求值错(含混型比较的 type 错)一律视为不成立并记 dev 日志,不做隐式转换** |
 
 **处理函数契约**:独立 `.ajs` 文件,程序返回值即函数,签名 `(args, progress)`:
 
@@ -391,8 +393,8 @@ print(g.grade(59));
 
 **平台职责(匹配 + 三条简单校验 + 兜底)**:
 
-1. 挂载校验:路由表字段齐全、pattern 语法合法、`script` 引用的文件存在且返回函数、`template`(文件与内联串同规)全部过白名单编译
-2. 分发:按序匹配(domain 后缀规则 + subdomain + port + path)→ 载入 script → 调用 → 按返回索引取模板 → 渲染
+1. 挂载校验:路由表字段齐全、pattern 语法合法、`script` 引用的文件存在且返回函数、`template`(文件与内联串同规)全部过白名单编译、`condition` 表达式编译通过(禁用语法在此暴露)
+2. 分发:**按序匹配,路由表顺序即优先级,先匹配先生效** —— domain 后缀规则 + subdomain + port + path 全过后才求值 `condition`;**URL 命中而条件不成立 → 继续向下扫描**(叠层路由:同路径多条、条件由严到宽);条件求值错视为不成立并记日志。命中后载入 script → 调用 → 按返回索引取模板 → 渲染
 3. 兜底:未命中(且无 `path: "*"` 条目)、函数抛错、返回不合法(索引越界等)→ 平台默认 404 页;错误信息用第 9 节的错误串格式
 
 平台侧没有任何路由逻辑可被攻击 —— 路由决策的输入是宿主解析的 URL 与挂载时已校验的静态表,函数的返回值被限定在模板列表索引内。一级域名 → 应用的归属仍由 webos 安装清单决定。dev 模式提供 console 面板,`print` 输出与错误串均可见(作者调试出口)。
@@ -404,7 +406,12 @@ print(g.grade(59));
 return [
   { domain: "mygame.os", path: "/", template: "home.html" },
   { domain: "mygame.os", path: "/level/<level>/", script: "quest", template: ["quest.html", "locked.html"] },
-  { domain: "mygame.os", subdomain: "wiki", path: "/", template: "wiki.html" },
+  { domain: "mygame.os", path: "/ending/", condition: "score > 9", template: "ending-gold.html" },
+  { domain: "mygame.os", path: "/ending/", template: "ending-normal.html" },
+  { domain: "mygame.os", path: "/docs/api/", template: "api.html" },
+  { domain: "mygame.os", path: "/docs/*", script: "docs", template: "docs.html" },      // 末段 * 认领子树(具体条目排前面)
+  { domain: "mygame.os", subdomain: "*", path: "/", template: "tenant.html" },           // 任意单级子域
+  { domain: "mygame.os", subdomain: "wiki", path: "/", template: "wiki.html" },          // 具体子域,排在通配之前
   { domain: "mygame.os", port: 8080, path: "/", script: "admin", template: "admin.html" },
   { domain: "mygame.os", path: "*", template: "my404.html" },
   { domain: "127.0.0.1", path: "/", template: "local.html" },
@@ -419,7 +426,7 @@ return (args, progress) => {
 };
 ```
 
-分发实测:`mygame.os/level/q2/` @2章 → `locked.html`;@5章 → `quest.html`(data 带 `level`/`tab`);`wiki.mygame.os/` → 子域条目;`mygame.os:8080/` → 端口条目,`mygame.os:9999/` → 兜底;`127.0.0.1/` → IP 主域名条目。
+分发实测:`mygame.os/level/q2/` @2章 → `locked.html`;@5章 → `quest.html`(data 带 `level`/`tab`);`wiki.mygame.os/` → 子域条目;`mygame.os:8080/` → 端口条目,`mygame.os:9999/` → 兜底;`127.0.0.1/` → IP 主域名条目。`/ending/` @score=12 → `ending-gold.html`(条件成立);@score=5 → 条件不成立落向下一条 → `ending-normal.html`;@score 为字符串 `"12"` → 混型 type 错 → 视为不成立 + dev 日志,同落 `ending-normal.html`。
 
 
 ## 附录 A:迭代决策记录
@@ -439,6 +446,11 @@ return (args, progress) => {
 | 11 | **实现落地 + 文法勘误**:let 初始化值、三元分支、数组/对象元素由 Assign 更正为 Expr(与脚注 ¹"赋值仅语句位与 for 头"一致,消除文法与脚注的自相矛盾);构造顺序勘误确认:字段 → 方法(不含 constructor)→ constructor 赋值,故 keys(实例) 序为"声明字段、方法、构造器赋值键"。实现:110 例测试全绿,样例与编译产物落 examples/compiled |
 | 12 | **DOM 控制通道入规格(16.6)与实现**:能力句柄(ref 属性 + mountTree 铸造,函数值跨界、单元素能力、失效即拒)、窄命令集 ui.*(值校验与模板同一来源)、事件数据快照跨界、append 前验树(手搓树是预期攻击面)、`return (refs) => {}` 程序契约。实现中发现并修复:style 值字符集曾放行 `url(`(补禁令,封外传通道);箭头试探回退吞掉体内真错(补 sawArrow 守卫);命令名 `class` 撞关键字更名 `ui.cls`(属性名仍不接受关键字,子集原则不变)。测试 120 例全绿 |
 | 13 | **伪后端路由定稿(16.7)**:Django 风格纯数据路由表 —— `domain` 必填(域名/IP 均可)、`subdomain` 通配后缀规则、`port` 精确匹配(省略=默认端口)、`path` 参数(`<名字>`/`<number:名字>`)与 `path: "*"` 兜底(作者自定义 404)、`script` 省略即纯 HTML 页、`template` 文件名或内联串(列表由函数选索引);处理函数独立文件,直收 `(args, progress)`,渲染只读; 命名原则:英文全拼、不用缩写、不用上下文对象(面向不懂编程的作者)。平台仅匹配 + 三条挂载校验 + 兜底,无路由逻辑可攻击; 进度写回与跳转不做,需要时以能力注入方式引入。样例经编译器与分发验证 |
+| 14 | **路由实现落地(16.7)+ `condition` 进度条件**:平台侧 `src/router.js`(挂载校验/按序分发/参数路径/兜底 404,处理函数收 progress 深拷贝快照);`condition` 复用语言编译器 —— 裸标识符经 AST 改写解析为 `progress` 的键、禁函数调用等一切副作用语法(纯数据谓词)、挂载期编译校验、产物形态同 B.2;**求值错与非 boolean(含混型比较的 type 错)一律视为不成立并记 dev 日志,不做隐式转换**;路由表顺序即优先级,URL 命中而条件不成立继续向下匹配(叠层路由)。测试 140 例全绿 |
+| 15 | **路由通配**:path 末段 `*` = 前缀认领子树(段对齐、不捕获余段;仅允许末段,`/*` 与中段 `*` 挂载拒绝;整域兜底仍是 `path: "*"` 且须作同域最后一条);`subdomain: "*"` = 任意单级前缀(多级前缀与裸域不命中)。两者均不捕获命中内容、均按序优先,更具体的规则排在通配之前由作者保证 —— 平台侧依旧零匹配逻辑可攻击。测试 145 例全绿 |
+| 16 | **安全审查修复(URL 槽四面加固)**:① 判定改在浏览器规范化后的形态上(前导空白 `" javascript:x"`、内嵌控制字符 `"java\nscript:x"`、反斜杠 `"\/evil.com"` 此前可绕过,Node 服务路径无 DOMParser 复检时真实可达);② href/src 改**整条拼接值**统一校验(此前逐段校验,`{{段}}:静态段` 可拼出 scheme);③ 校验后补属性转义(此前值含 `"` 可在 html 字符串导出路径越出属性引号);④ 纯静态 href/src 编译期即拒;checkUrlValue/urlSlot 归一为单一来源,checkHtml 复检同步规范化。serve.mjs 装载器加目录围栏。测试 149 例全绿 + 真实 HTTP 攻击模拟(属性注入 payload 被转义为惰性文本) |
+| 17 | **DOM 通道脚本定案主线程**:页面动态脚本(16.6)不进 Worker —— 同步 DOM 能力过线程界要么命令队列异步化(改时序语义)要么 SAB 阻塞 RPC(要 COOP/COEP + 绑死主线程),均不值;页面卡死归作者责任(第 7 轮出域方针的延续,处置权在宿主:接受或不上架)。Worker 备用路线收窄为仅面向伪 SSR/路由线(处理器是纯函数、快照边界天然可迁移,若实施为 Worker RPC 壳 + terminate 兜底);时间控制/停止信号若引入,采用"宿主注入同步 tick + 不可被脚本 catch 的中止哨兵"形态,不做 async(语言无异步是定案,插桩不得从后门引入) |
+| 18 | **后端执行进 Worker(落地)**:`src/worker-core.js`(共享核心)+ 双环境薄壳 `worker-boot.mjs`(浏览器,self 判据)/ `worker-boot-node.mjs`(node: 静态导入)—— 宿主侧 `src/worker-host.js` 的 `createWorkerBackend()`。消息协议即第 10 节边界的线程版:args/progress 结构化克隆入、返回值克隆出(函数不过界,返回值含函数即报错)、语言错误以 {kind, message} 形状回传、print 单向消息转发(无返回值能力天然可异步化)。挂载校验由 Worker 侧 `load` 承担(编译 + 验证程序返回函数);超时(默认 5s,`SCRIPT_TIMEOUT_MS` 可调)→ terminate 强制终止 + 惰性重生;terminate 后迟到事件按实例隔离不误杀重生 Worker。路由器新增 `runScript` 执行器选项(提供时处理函数走 Worker,否则内联执行不变);条件表达式与模板渲染留主线程(条件是单表达式无循环、天然有界)。页面动态脚本维持第 17 轮定案。**实现约束(浏览器实测):Worker 入口不得使用顶层 await —— 模块求值挂起期间到达的消息会被丢弃,薄壳必须在同步求值内完成消息注册**。Node(worker_threads)153 例全绿 + 真实 HTTP 死循环拦截实测;浏览器(module Worker)五项实测通过(执行/克隆快照/错误形状/超时强杀/重生/print 转发) |
 
 ## 附录 B:实现方案调研(非规范性,不含实施承诺)
 
@@ -465,7 +477,7 @@ return (args, progress) => {
 - CSP 设 `script-src 'self' blob:` —— `blob:` 是浏览器内部地址,**零网络请求**,不违反"禁外部资源";通行证(不可猜测的 blob 地址)由持有受验证编译产物的运行时**垄断铸造**,沙盒代码无 `URL`/`Blob` 能力,markup 注入拿不到地址
 - **代价(唯一实付)**:编译变异步(`import()` 返回 Promise),执行仍同步;编译可缓存,异步每程序只发生一次
 
-**选 blob 而非 Worker 的场景论据**:宿主定位为游戏作者的网页制作工具,伪 SSR 架构下每次事件都要过一遍渲染管线(事件快照入 → 视图树出)——运行时若在 Worker,每次渲染都是一次结构化克隆往返,交互频率下不划算;blob 主线程直达。Worker 降为备用:未来真正敌意内容的场景再启用。
+**选 blob 而非 Worker 的场景论据**:宿主定位为游戏作者的网页制作工具,伪 SSR 架构下每次事件都要过一遍渲染管线(事件快照入 → 视图树出)——运行时若在 Worker,每次渲染都是一次结构化克隆往返,交互频率下不划算;blob 主线程直达。Worker 降为备用:未来真正敌意内容的场景再启用。**第 17/18 轮落地分工**:页面动态脚本(16.6)定案主线程不进 Worker(卡死归作者);伪 SSR/路由处理器已 Worker 化(`src/worker-host.js`,worker_threads / module Worker 双环境,超时 terminate,克隆往返成本由低频页面请求吸收)。
 
 **nonce 判定:不采用。** 死结:随机 nonce 进不了静态 CSP(静态页无法预知每次加载的随机值;固定 nonce 即公开,查看源代码可见)。风险账(若采用):DOM 外泄(依赖浏览器 nonce 隐藏缓解,实现有版本差异)、不记名通行证只认证通道不认证内容(可信代码把受控内容包进带 nonce 的 script 即 RCE)、`strict-dynamic` 信任放大。记录为"服务端渲染场景可用,静态站不适用"。
 

@@ -1,0 +1,27 @@
+<div id="results-page" style="margin: 20px auto; width: 620px">
+  <div id="topbar">
+    <p style="display: inline-block; width: 110px; font-size: 26px; font-weight: bold"><span style="color: #4285f4">A</span><span style="color: #ea4335">e</span><span style="color: #fbbc05">t</span><span style="color: #4285f4">h</span><span style="color: #34a853">e</span><span style="color: #ea4335">r</span></p>
+    <p class="qbox" style="display: inline-block; border: 1px solid #dfe1e5; border-radius: 20px; padding: 8px 16px; width: 360px; color: #202124">{{it.query}}</p>
+  </div>
+  {{#if it.hasQuery}}
+  <p class="stats" style="color: #70757a; font-size: 13px">找到约 {{it.count}} 条结果(用时 {{it.secs}} 秒)</p>
+  {{#if it.hasResults}}
+  <ol id="hits">
+    {{#each it.results as r}}
+    <li class="hit" style="margin: 22px 0">
+      <p class="url" style="color: #0d652d; font-size: 13px; margin: 2px 0">{{r.url}}</p>
+      <p class="title" style="margin: 2px 0"><a href="{{r.url}}" style="color: #1a0dab; font-size: 18px; text-decoration: none">{{r.title}}</a></p>
+      <p class="snippet" style="color: #4d5156; font-size: 14px; line-height: 1.6">{{#each r.segs as s}}{{#if s.hit}}<b>{{s.text}}</b>{{else}}{{s.text}}{{/if}}{{/each}}</p>
+    </li>
+    {{/each}}
+  </ol>
+  <p style="color: #70757a; font-size: 13px">分页:1 2 3 4 5 下一页(演示静态)</p>
+  {{else}}
+  <p class="empty" style="color: #4d5156; margin: 60px 0 0 0">找不到和您查询相符的内容。</p>
+  <p style="color: #70757a">建议:检查拼写,或改用更短的关键词。</p>
+  {{/if}}
+  {{else}}
+  <p class="empty" style="color: #4d5156; margin: 60px 0 0 0">请输入关键词,例如 <a href="?q=aether">aether</a>。</p>
+  {{/if}}
+  <p style="color: #70757a; font-size: 13px; margin: 40px 0 0 0"><a href="..">返回首页</a> · <a href="?q=白名单">搜"白名单"</a></p>
+</div>

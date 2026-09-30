@@ -383,7 +383,10 @@ export function compile(source, opts = {}) {
 }
 
 const IS_NODE = typeof window === 'undefined';
-const blobUrls = new WeakMap();
+// 缓存键是源码字符串(原始值),WeakMap 只收对象键 —— 浏览器路径一跑
+// 就抛 "Invalid value used as weak map key",改用 Map;模块一经 import()
+// 常驻引擎模块表,blob URL 与之间生共死,缓存不算泄漏
+const blobUrls = new Map();
 
 export function importModule(code) {
   if (IS_NODE) {

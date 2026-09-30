@@ -470,7 +470,8 @@ export function checkHtml(html) {
     }
     for (const c of el.children) walk(c);
   };
-  walk(doc.body);
+  // body 是解析容器本身,不在白名单内:只复检其子树
+  for (const c of doc.body.children) walk(c);
   return bad.length ? { ok: false, violations: bad } : { ok: true };
 }
 
